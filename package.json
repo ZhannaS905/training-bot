@@ -1,0 +1,25 @@
+{
+  "name": "fitness-training-bot",
+  "version": "1.0.0",
+  "description": "Бот для записи на тренировки с системой абонементов и оплаты",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
+  },
+  "keywords": [
+    "bot",
+    "fitness",
+    "training",
+    "maxbot"
+  ],
+  "author": ":Zhanna S",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "@maxhub/max-bot-api": "^0.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20"
+  }
+}

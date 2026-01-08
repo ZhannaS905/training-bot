@@ -1,0 +1,160 @@
+{
+  "timestamp": "2026-01-05T11:57:22.046Z",
+  "adminId": 5819064,
+  "action": "full_stats_clear",
+  "usersCount": 2,
+  "stats": {
+    "5819064": {
+      "name": "Жанна С",
+      "totalTrainings": 1,
+      "attended": 1,
+      "missed": 0,
+      "maybe": 0,
+      "noShow": 0,
+      "history": [
+        {
+          "date": "2026-01-05",
+          "action": "yes",
+          "timestamp": "2026-01-05T11:54:03.155Z"
+        }
+      ],
+      "subscriptionHistory": [
+        {
+          "date": "2026-01-03T06:52:16.763Z",
+          "type": "monthly",
+          "lessons": 8,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": null
+        },
+        {
+          "date": "2026-01-03T06:53:09.783Z",
+          "type": "monthly",
+          "lessons": 7,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-03T06:53:09.782Z"
+        },
+        {
+          "date": "2026-01-03T08:49:29.258Z",
+          "type": "monthly",
+          "lessons": 6,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-03T08:49:29.256Z"
+        },
+        {
+          "date": "2026-01-04T07:21:51.208Z",
+          "type": "monthly",
+          "lessons": 5,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T07:21:51.203Z"
+        },
+        {
+          "date": "2026-01-04T07:22:12.865Z",
+          "type": "monthly",
+          "lessons": 6,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T07:21:51.203Z"
+        },
+        {
+          "date": "2026-01-04T07:34:53.826Z",
+          "type": "monthly",
+          "lessons": 5,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T07:34:53.824Z"
+        },
+        {
+          "date": "2026-01-04T07:43:39.081Z",
+          "type": "monthly",
+          "lessons": 4,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T07:43:39.079Z"
+        },
+        {
+          "date": "2026-01-04T09:14:55.118Z",
+          "type": "monthly",
+          "lessons": 3,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T09:14:55.114Z"
+        },
+        {
+          "date": "2026-01-04T11:25:35.296Z",
+          "type": "monthly",
+          "lessons": 2,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T11:25:35.294Z"
+        },
+        {
+          "date": "2026-01-04T11:25:52.976Z",
+          "type": "monthly",
+          "lessons": 3,
+          "startDate": "2026-01-03T06:50:45.006Z",
+          "lastUsed": "2026-01-04T11:25:35.294Z"
+        },
+        {
+          "date": "2026-01-05T07:06:34.355Z",
+          "type": "single",
+          "lessons": 1,
+          "startDate": "2026-01-05T07:06:34.355Z",
+          "lastUsed": null,
+          "action": "added_by_admin"
+        },
+        {
+          "date": "2026-01-05T07:09:31.987Z",
+          "type": "single",
+          "lessons": 1,
+          "action": "removed_by_admin",
+          "removedBy": "admin_5819064"
+        },
+        {
+          "date": "2026-01-05T08:12:56.700Z",
+          "type": "single",
+          "lessons": 0,
+          "startDate": "2026-01-05T08:12:40.012Z",
+          "lastUsed": "2026-01-05T08:12:56.699Z"
+        },
+        {
+          "date": "2026-01-05T09:57:40.006Z",
+          "type": "single",
+          "lessons": 0,
+          "action": "removed_by_admin",
+          "removedBy": "admin_5819064"
+        },
+        {
+          "date": "2026-01-05T11:33:51.643Z",
+          "type": "single",
+          "lessons": 1,
+          "startDate": "2026-01-05T11:33:51.643Z",
+          "lastUsed": null,
+          "action": "added_by_admin"
+        },
+        {
+          "date": "2026-01-05T11:33:58.533Z",
+          "type": "single",
+          "lessons": 1,
+          "action": "removed_by_admin",
+          "removedBy": "admin_5819064"
+        },
+        {
+          "date": "2026-01-05T11:54:49.991Z",
+          "type": "single",
+          "lessons": 1,
+          "action": "removed_by_admin",
+          "removedBy": "admin_5819064"
+        }
+      ],
+      "firstSeen": "2026-01-03T06:49:09.003Z",
+      "lastActivity": "2026-01-05T11:54:03.155Z"
+    },
+    "78673743": {
+      "name": "Татьяна",
+      "totalTrainings": 0,
+      "attended": 0,
+      "missed": 0,
+      "maybe": 0,
+      "noShow": 0,
+      "history": [],
+      "subscriptionHistory": [],
+      "firstSeen": "2026-01-05T05:43:47.718Z",
+      "lastActivity": "2026-01-05T10:09:31.388Z"
+    }
+  }
+}

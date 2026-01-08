@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-01-06T11:23:03.702Z",
+  "adminId": 5819064,
+  "action": "reset_indicators",
+  "users": {
+    "5819064": {
+      "name": "Жанна С",
+      "totalTrainings": 39,
+      "attended": 30,
+      "missed": 9,
+      "maybe": 6,
+      "noShow": 0
+    },
+    "64283873": {
+      "name": "Вика",
+      "totalTrainings": 0,
+      "attended": 0,
+      "missed": 0,
+      "maybe": 0,
+      "noShow": 0
+    },
+    "78673743": {
+      "name": "Татьяна",
+      "totalTrainings": 2,
+      "attended": 1,
+      "missed": 1,
+      "maybe": 1,
+      "noShow": 0
+    }
+  },
+  "totals": {
+    "totalUsers": 3,
+    "totalTrainings": 41,
+    "totalAttended": 31,
+    "totalMissed": 10,
+    "totalMaybe": 7,
+    "totalNoShow": 0
+  }
+}

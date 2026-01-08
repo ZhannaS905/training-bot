@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-01-05T11:57:59.332Z",
+  "adminId": 5819064,
+  "action": "reset_indicators",
+  "users": {
+    "5819064": {
+      "name": "Жанна С",
+      "totalTrainings": 0,
+      "attended": 0,
+      "missed": 0,
+      "maybe": 0,
+      "noShow": 0
+    },
+    "78673743": {
+      "name": "Татьяна",
+      "totalTrainings": 0,
+      "attended": 0,
+      "missed": 0,
+      "maybe": 0,
+      "noShow": 0
+    }
+  },
+  "totals": {
+    "totalUsers": 2,
+    "totalTrainings": 0,
+    "totalAttended": 0,
+    "totalMissed": 0,
+    "totalMaybe": 0,
+    "totalNoShow": 0
+  }
+}

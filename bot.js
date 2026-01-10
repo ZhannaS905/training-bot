@@ -1,9 +1,8 @@
+// bot.js - ОЧИЩЕННЫЙ ФАЙЛ БЕЗ CRM И БЕЗ ДУБЛИКАТОВ
 require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const querystring = require('querystring');
 
 const bot = new Bot(process.env.BOT_TOKEN);
 
@@ -122,150 +121,6 @@ function getNextTrainingDay(currentDate) {
     return `${dayName}, ${nextDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}`;
 }
 
-// ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ЧЕРЕЗ API MAX ==========
-
-/**
- * Удаляет сообщение через прямой HTTP-запрос к API Max
- * @param {string} messageId - ID сообщения для удаления
- * @returns {Promise<boolean>} - true если удалено успешно
- */
-async function deleteMessageDirect(messageId) {
-    return new Promise((resolve) => {
-        if (!messageId) {
-            resolve(false);
-            return;
-        }
-        
-        const query = querystring.stringify({ message_id: messageId });
-        const url = `https://platform-api.max.ru/messages?${query}`;
-        
-        const options = {
-            method: 'DELETE',
-            headers: {
-                'Authorization': process.env.BOT_TOKEN,
-                'Content-Type': 'application/json'
-            },
-            timeout: 5000 // 5 секунд таймаут
-        };
-        
-        const req = https.request(url, options, (res) => {
-            let data = '';
-            
-            res.on('data', (chunk) => {
-                data += chunk;
-            });
-            
-            res.on('end', () => {
-                try {
-                    const result = JSON.parse(data);
-                    resolve(result.success === true);
-                } catch {
-                    resolve(false);
-                }
-            });
-        });
-        
-        req.on('error', () => {
-            resolve(false);
-        });
-        
-        req.on('timeout', () => {
-            req.destroy();
-            resolve(false);
-        });
-        
-        req.end();
-    });
-}
-
-/**
- * Удаляет старое сообщение опроса
- * @param {string} messageId - ID старого сообщения
- */
-async function deleteOldPollMessage(messageId) {
-    try {
-        if (!messageId) return;
-        
-        logToFile(`🗑️ Пытаюсь удалить старое сообщение опроса: ${messageId.substring(0, 20)}...`);
-        
-        const deleted = await deleteMessageDirect(messageId);
-        
-        if (deleted) {
-            logToFile(`✅ Старое сообщение удалено: ${messageId.substring(0, 20)}...`);
-        } else {
-            logToFile(`⚠️ Не удалось удалить старое сообщение ${messageId.substring(0, 20)}..., но это не критично`);
-        }
-        
-    } catch (error) {
-        logToFile(`⚠️ Ошибка при удалении старого сообщения: ${error.message}`);
-    }
-}
-
-// ========== ФУНКЦИИ ДЛЯ ОПРОСОВ ==========
-
-/**
- * Создает текст опроса
- */
-function createPollText(dateKey, poll) {
-    const yesCount = poll.yes.length;
-    const noCount = poll.no.length;
-    const maybeCount = poll.maybe.length;
-    const total = yesCount + noCount + maybeCount;
-    
-    const date = new Date(dateKey);
-    const formattedDate = date.toLocaleDateString('ru-RU', {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long'
-    });
-    
-    const trainingType = 'ВИИТ тренировка';
-    const trainingLocation = 'мкр. Заря';
-    const trainingTime = '20:00';
-    
-    let text = `**${formattedDate}**\n`;
-    text += `*${trainingType}*\n\n`;
-    text += `📍 ${trainingLocation}\n`;
-    text += `⏰ ${trainingTime}\n\n`;
-    
-    if (total === 0) {
-        text += `*🤨  Пока никто не записался!*\n\n`;
-    } else {
-        text += `**Участников: ${total}**\n\n`;
-        
-        if (yesCount > 0) {
-            text += `**✅ Идут (${yesCount}):**\n`;
-            poll.yes.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
-            text += `\n`;
-        }
-        
-        if (maybeCount > 0) {
-            text += `**❓ Возможно (${maybeCount}):**\n`;
-            poll.maybe.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
-            text += `\n`;
-        }
-        
-        if (noCount > 0) {
-            text += `**❌ Не идут (${noCount}):**\n`;
-            poll.no.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
-            text += `\n`;
-        }
-    }
-    
-    text += `Используйте кнопки ниже:`;
-    
-    return text;
-}
-
-/**
- * Создает клавиатуру для опроса
- */
 function createPollKeyboard() {
     return Keyboard.inlineKeyboard([
         [
@@ -281,118 +136,6 @@ function createPollKeyboard() {
             Keyboard.button.callback('ℹ️ Помощь', 'poll_help')
         ]
     ]);
-}
-
-/**
- * Создает новое сообщение с опросом
- */
-async function createNewPollMessage(chatId, pollText, pollKey) {
-    try {
-        logToFile(`🆕 Создаю новое сообщение с опросом в чате ${chatId}`);
-        
-        const keyboard = createPollKeyboard();
-        
-        const message = await bot.api.sendMessageToChat(chatId, pollText, {
-            format: 'markdown',
-            attachments: [keyboard]
-        });
-        
-        let messageId = null;
-        
-        if (message?.body?.mid) {
-            messageId = message.body.mid;
-            pollMessages[pollKey] = messageId;
-            logToFile(`✅ Создан новый опрос, mid: ${messageId.substring(0, 20)}...`);
-        } else if (message?.mid) {
-            messageId = message.mid;
-            pollMessages[pollKey] = messageId;
-            logToFile(`✅ Создан новый опрос, mid: ${messageId.substring(0, 20)}...`);
-        } else {
-            logToFile(`⚠️ Не получили mid от нового сообщения`);
-            return null;
-        }
-        
-        return messageId;
-        
-    } catch (sendError) {
-        logToFile(`❌ Не удалось создать сообщение: ${sendError.message}`);
-        return null;
-    }
-}
-
-/**
- * Основная функция обновления опроса
- * Создает новое сообщение и удаляет старое
- */
-async function updatePollInChat(chatId) {
-    try {
-        const today = new Date().toISOString().split('T')[0];
-        const pollKey = `${chatId}_${today}`;
-        const oldMessageId = pollMessages[pollKey];
-
-        if (!chatId) {
-            logToFile('⚠️ Нет chatId');
-            return null;
-        }
-        
-        const poll = dailyPolls[today] || { yes: [], no: [], maybe: [] };
-        const pollText = createPollText(today, poll);
-        const keyboard = createPollKeyboard();
-
-        logToFile(`🔄 Обновляю опрос в чате ${chatId}, предыдущий: ${oldMessageId ? oldMessageId.substring(0, 20) + '...' : 'нет'}`);
-
-        let newMessageId = null;
-
-        // Пробуем обновить через forward_message_id (создает новое сообщение)
-        if (oldMessageId) {
-            try {
-                logToFile(`✏️ Использую forward_message_id для обновления`);
-                
-                const result = await bot.api.sendMessageToChat(chatId, pollText, {
-                    format: 'markdown',
-                    attachments: [keyboard],
-                    forward_message_id: oldMessageId
-                });
-                
-                if (result?.body?.mid) {
-                    newMessageId = result.body.mid;
-                    
-                    // Если создалось новое сообщение (MID изменился)
-                    if (newMessageId !== oldMessageId) {
-                        pollMessages[pollKey] = newMessageId;
-                        logToFile(`🆕 Создано новое сообщение: ${newMessageId.substring(0, 20)}... (вместо ${oldMessageId.substring(0, 20)}...)`);
-                        
-                        // Удаляем старое сообщение в фоне
-                        setTimeout(() => {
-                            deleteOldPollMessage(oldMessageId);
-                        }, 1000);
-                    } else {
-                        logToFile(`✅ Сообщение отредактировано (тот же MID)`);
-                    }
-                }
-            } catch (error) {
-                logToFile(`⚠️ Ошибка при обновлении через forward_message_id: ${error.message}`);
-            }
-        }
-
-        // Если не удалось обновить, создаем новое сообщение
-        if (!newMessageId) {
-            newMessageId = await createNewPollMessage(chatId, pollText, pollKey);
-            
-            // Если было старое сообщение - удаляем его
-            if (oldMessageId && newMessageId && oldMessageId !== newMessageId) {
-                setTimeout(() => {
-                    deleteOldPollMessage(oldMessageId);
-                }, 1000);
-            }
-        }
-        
-        return newMessageId;
-        
-    } catch (error) {
-        logToFile(`❌ Критическая ошибка в updatePollInChat: ${error.message}`);
-        return null;
-    }
 }
 
 // ========== СИСТЕМА АБОНЕМЕНТОВ ==========
@@ -530,6 +273,208 @@ function createPaymentMethodKeyboard(subscriptionType) {
             Keyboard.button.callback('« Назад к выбору', 'user_buy')
         ]
     ]);
+}
+
+// ========== ФУНКЦИИ ОПРОСОВ ==========
+function createPollText(dateKey, poll) {
+    const yesCount = poll.yes.length;
+    const noCount = poll.no.length;
+    const maybeCount = poll.maybe.length;
+    const total = yesCount + noCount + maybeCount;
+    
+    const date = new Date(dateKey);
+    const formattedDate = date.toLocaleDateString('ru-RU', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long'
+    });
+    
+    // Тренировка по умолчанию (без CRM)
+    const trainingType = 'ВИИТ тренировка';
+    const trainingLocation = 'мкр. Заря';
+    const trainingTime = '20:00';
+    
+    let text = `**${formattedDate}**\n`;
+    text += `*${trainingType}*\n\n`;
+    text += `📍 ${trainingLocation}\n`;
+    text += `⏰ ${trainingTime}\n\n`;
+    
+    if (total === 0) {
+        text += `*🤨  Пока никто не записался!*\n\n`;
+    } else {
+        text += `**Участников: ${total}**\n\n`;
+        
+        if (yesCount > 0) {
+            text += `**✅ Идут (${yesCount}):**\n`;
+            poll.yes.forEach((name, i) => {
+                text += `${i + 1}. ${name}\n`;
+            });
+            text += `\n`;
+        }
+        
+        if (maybeCount > 0) {
+            text += `**❓ Возможно (${maybeCount}):**\n`;
+            poll.maybe.forEach((name, i) => {
+                text += `${i + 1}. ${name}\n`;
+            });
+            text += `\n`;
+        }
+        
+        if (noCount > 0) {
+            text += `**❌ Не идут (${noCount}):**\n`;
+            poll.no.forEach((name, i) => {
+                text += `${i + 1}. ${name}\n`;
+            });
+            text += `\n`;
+        }
+    }
+    
+    text += `Используйте кнопки ниже:`;
+    
+    return text;
+}
+
+async function createNewPollMessage(chatId, pollText, pollKey) {
+    try {
+        logToFile(`🆕 Создаю новое сообщение с опросом в чате ${chatId}`);
+        
+        const keyboard = createPollKeyboard();
+        
+        const message = await bot.api.sendMessageToChat(chatId, pollText, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+        let messageId = null;
+        
+        if (message?.body?.mid) {
+            messageId = message.body.mid;
+            pollMessages[pollKey] = messageId;
+            logToFile(`✅ Создан новый опрос, mid: ${messageId}`);
+        } else if (message?.mid) {
+            messageId = message.mid;
+            pollMessages[pollKey] = messageId;
+            logToFile(`✅ Создан новый опрос, mid: ${messageId}`);
+        } else {
+            logToFile(`⚠️ Не получили mid`);
+            return null;
+        }
+        
+        return messageId;
+        
+    } catch (sendError) {
+        logToFile(`❌ Не удалось создать сообщение: ${sendError.message}`);
+        return null;
+    }
+}
+
+async function updatePollInChat(chatId) {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const pollKey = `${chatId}_${today}`;
+        const messageId = pollMessages[pollKey];
+
+        if (!chatId) {
+            logToFile('⚠️ Нет chatId');
+            return;
+        }
+        
+        const poll = dailyPolls[today] || { yes: [], no: [], maybe: [] };
+        const pollText = createPollText(today, poll);
+        const keyboard = createPollKeyboard();
+
+        logToFile(`🔄 Обновляю опрос в чате ${chatId}, message_id: ${messageId}`);
+
+        // Пытаемся обновить существующее сообщение
+        if (messageId) {
+            try {
+                const result = await bot.api.sendMessageToChat(chatId, pollText, {
+                    format: 'markdown',
+                    attachments: [keyboard],
+                    forward_message_id: messageId
+                });
+                
+                if (result?.body?.mid) {
+                    const newMessageId = result.body.mid;
+                    
+                    // Если это новое сообщение (mid изменился), обновляем ID
+                    if (newMessageId !== messageId) {
+                        pollMessages[pollKey] = newMessageId;
+                        logToFile(`✅ Создано новое сообщение, mid: ${newMessageId}`);
+                        
+                        // Пытаемся удалить старое сообщение
+                        try {
+                            await bot.api.deleteMessage({
+                                message_id: messageId,
+                                chat_id: chatId
+                            });
+                            logToFile(`🗑️ Удалено старое сообщение`);
+                        } catch (deleteError) {
+                            logToFile(`⚠️ Не удалось удалить старое сообщение: ${deleteError.message}`);
+                        }
+                    } else {
+                        logToFile(`✅ Сообщение обновлено`);
+                    }
+                    
+                    return newMessageId;
+                }
+                
+            } catch (editError) {
+                logToFile(`⚠️ Не удалось обновить сообщение: ${editError.message}`);
+                
+                // Если обновление не удалось, создаем новое
+                return await createNewPollAndDeleteOld(chatId, pollText, keyboard, pollKey, messageId);
+            }
+        } else {
+            // Если нет messageId, просто создаем новое сообщение
+            logToFile(`⚠️ Нет message_id для чата ${chatId}, создаю новое`);
+            return await createNewPollMessage(chatId, pollText, pollKey);
+        }
+        
+        return null;
+
+    } catch (error) {
+        logToFile(`❌ Ошибка в updatePollInChat: ${error.message}`);
+        return null;
+    }
+}
+
+// Вспомогательная функция для создания нового опроса и удаления старого
+async function createNewPollAndDeleteOld(chatId, pollText, keyboard, pollKey, oldMessageId) {
+    try {
+        // Создаем новое сообщение
+        const newMessage = await bot.api.sendMessageToChat(chatId, pollText, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+        if (newMessage?.body?.mid) {
+            const newMessageId = newMessage.body.mid;
+            pollMessages[pollKey] = newMessageId;
+            logToFile(`✅ Создан новый опрос вместо обновления, mid: ${newMessageId}`);
+            
+            // Пытаемся удалить старое сообщение
+            if (oldMessageId) {
+                try {
+                    await bot.api.deleteMessage({
+                        message_id: oldMessageId,
+                        chat_id: chatId
+                    });
+                    logToFile(`🗑️ Удалено старое сообщение`);
+                } catch (deleteError) {
+                    logToFile(`⚠️ Не удалось удалить старое сообщение: ${deleteError.message}`);
+                }
+            }
+            
+            return newMessageId;
+        }
+        
+        return null;
+        
+    } catch (sendError) {
+        logToFile(`❌ Не удалось создать новое сообщение: ${sendError.message}`);
+        return null;
+    }
 }
 
 // ========== ПРОВЕРКА АБОНЕМЕНТА ==========
@@ -707,7 +652,7 @@ async function handlePollResponse(ctx, responseType) {
         // Обновляем статистику пользователя
         updateUserStats(userId, userName, responseType, today);
         
-        // ОБНОВЛЯЕМ ОПРОС В ЧАТЕ (используем исправленную функцию)
+        // Обновляем опрос в чате
         if (chatId) {
             await updatePollInChat(chatId);
         }
@@ -902,7 +847,7 @@ bot.action('poll_cancel', async (ctx) => {
         
         logToFile(`↩️ Голос отменен: ${userName}`);
         
-        // ОБНОВЛЯЕМ ОПРОС В ЧАТЕ
+        // Обновляем опрос в чате
         if (chatId) {
             await updatePollInChat(chatId);
         }
@@ -981,18 +926,9 @@ bot.command('опрос', async (ctx) => {
         const poll = dailyPolls[today];
         const pollText = createPollText(today, poll);
         
-        // Используем исправленную функцию
         await createNewPollMessage(chatId, pollText, pollKey);
-        
-        // Удаляем команду через некоторое время
-        setTimeout(async () => {
-            try {
-                await ctx.deleteMessage();
-                logToFile(`🗑️ Удалена /опрос от ${userName}`);
-            } catch (deleteError) {
-                logToFile(`⚠️ Не удалось удалить команду /опрос: ${deleteError.message}`);
-            }
-        }, 2000);
+        await ctx.deleteMessage();
+        logToFile(`🗑️ Удалена /опрос от ${userName}`);
         
     } catch (error) {
         logToFile(`⚠️ Ошибка: ${error.message}`);
@@ -1067,7 +1003,7 @@ bot.command('отменить', async (ctx) => {
         await ctx.deleteMessage();
         logToFile(`🗑️ Удалена команда /отменить от ${userName}`);
         
-        // ОБНОВЛЯЕМ ОПРОС В ЧАТЕ
+        // Обновляем опрос в чате
         if (chatId) {
             await updatePollInChat(chatId);
         }
@@ -1605,10 +1541,7 @@ bot.command('купить', async (ctx) => {
                 Keyboard.button.callback('📅 8 зан/мес (4400 руб.)', 'buy_monthly_select'),
                 Keyboard.button.callback('🎫 Разовое посещение(700 руб.)', 'buy_single_select')
             ],
-            [
-                Keyboard.button.callback('💡 Сравнить', 'user_buy_compare'),
-                Keyboard.button.callback('❓ FAQ', 'user_buy_faq')
-            ],
+            
             [
                 Keyboard.button.callback('« В главное меню', 'user_back')
             ]
@@ -1707,10 +1640,6 @@ bot.action('user_panel_buy', async (ctx) => {
             [
                 Keyboard.button.callback('📅 8 зан/мес (4400 руб.)', 'buy_monthly_select'),
                 Keyboard.button.callback('🎫 Разовое посещение (700 руб.)', 'buy_single_select')
-            ],
-            [
-                Keyboard.button.callback('💡 Сравнить', 'user_buy_compare'),
-                Keyboard.button.callback('❓ FAQ', 'user_buy_faq')
             ],
             [
                 Keyboard.button.callback('« Назад', 'user_back')
@@ -2711,10 +2640,7 @@ bot.action('user_buy', async (ctx) => {
                 Keyboard.button.callback('📅 8 зан/мес (4400 руб.)', 'buy_monthly_select'),
                 Keyboard.button.callback('🎫 Разовое посещение (700 руб.)', 'buy_single_select')
             ],
-            [
-                Keyboard.button.callback('💡 Сравнить', 'user_buy_compare'),
-                Keyboard.button.callback('❓ FAQ', 'user_buy_faq')
-            ],
+            
             [
                 Keyboard.button.callback('« Назад в панель', 'user_back')
             ]
@@ -2756,133 +2682,7 @@ bot.action('user_buy', async (ctx) => {
     }
 });
 
-// 4.1 Сравнение абонементов
-bot.action('user_buy_compare', async (ctx) => {
-    try {
-        // Удаляем предыдущее сообщение
-        try {
-            await ctx.deleteMessage();
-        } catch (deleteError) {
-            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
-        }
-        
-        const keyboard = Keyboard.inlineKeyboard([
-            [
-                Keyboard.button.callback('📅 Купить месячный', 'user_buy_monthly'),
-                Keyboard.button.callback('🎫 Оплатить Разовое посещение', 'user_buy_single')
-            ],
-            [
-                Keyboard.button.callback('« Назад к покупке', 'user_buy')
-            ]
-        ]);
-        
-        let response = `**💡 СРАВНЕНИЕ АБОНЕМЕНТОВ**\n\n`;
-        
-        
-        response += `**📅 МЕСЯЧНЫЙ АБОНЕМЕНТ:**\n`;
-        response += `└─ ✅ 8 занятий за 30 дней\n`;
-        response += `└─ ✅ Цена: 4400 руб.\n`;
-        response += `└─ ✅ Цена за занятие: 550 руб.\n`;
-        response += `└─ ✅ Экономия: 1200 руб.\n`;
-        response += `└─ ✅ Скидка: 21%\n`;
-        response += `└─ ✅ Для регулярных тренировок\n`;
-        response += `└─ ⚠️ Срок действия: 30 дней\n\n`;
-        
-        response += `**🎫 РАЗОВАЯ ОПЛАТА:**\n`;
-        response += `└─ ✅ 1 занятие\n`;
-        response += `└─ ✅ Цена: 700 руб.\n`;
-        response += `└─ ✅ Неограниченный срок\n`;
-        response += `└─ ✅ Гибкость\n`;
-        response += `└─ ⚠️ Дороже в пересчете\n\n`;
-        
-        response += `**📈 РАСЧЕТ ВЫГОДЫ:**\n\n`;
-        response += `**Если вы посещаете 2 раза в неделю:**\n`;
-        response += `└─ 🗓️ В месяц: 8 тренировок\n`;
-        response += `└─ 💰 Разовые: 8 × 700 = 5600 руб.\n`;
-        response += `└─ 💰 Месячный: 4400 руб.\n`;
-        response += `└─ 💰 Экономия: 1200 руб. (21%)\n\n`;
-        
-        response += `**Если вы посещаете 1 раз в неделю:**\n`;
-        response += `└─ 🗓️ В месяц: 4 тренировки\n`;
-        response += `└─ 💰 Разовые: 4 × 700 = 2800 руб.\n`;
-        response += `└─ 💰 Месячный: 4400 руб.\n`;
-        response += `└─ 💡 Рекомендация: разовые абонементы\n\n`;
-        
-        response += `**🎯 РЕКОМЕНДАЦИИ:**\n`;
-        response += `└─ 📅 **Месячный** - если ходите 2 раза в неделю\n`;
-        response += `└─ 🎫 **Разовое посещение** - если ходите 1 раз в неделю\n`;
-        
-        response += `\n**Выберите оптимальный для вас вариант:**`;
-        
-        await ctx.reply(response, {
-            format: 'markdown',
-            attachments: [keyboard]
-        });
-        
-    } catch (error) {
-        logToFile(`❌ Ошибка user_buy_compare: ${error.message}`);
-    }
-});
 
-// 4.4 FAQ по покупкам
-bot.action('user_buy_faq', async (ctx) => {
-    try {
-        // Удаляем предыдущее сообщение
-        try {
-            await ctx.deleteMessage();
-        } catch (deleteError) {
-            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
-        }
-        
-        const keyboard = Keyboard.inlineKeyboard([
-            [
-                Keyboard.button.callback('« Назад к покупке', 'user_buy')
-            ]
-        ]);
-        
-        let response = `**❓ FAQ ПО АБОНЕМЕНТАМ**\n\n`;
-        
-        response += `**🎯 ЧАСТЫЕ ВОПРОСЫ:**\n\n`;
-        response += `**1. Как купить абонемент?**\n`;
-        response += `└─ Выберите тип абонемента\n`;
-        response += `└─ Выберите способ оплаты\n`;
-        response += `└─ Следуйте инструкциям\n`;
-        response += `└─ Сообщите администратору\n`;
-        response += `└─ Абонемент активируется\n\n`;
-        
-        response += `**2. Что такое СПБ?**\n`;
-        response += `└─ СПБ (Система быстрых платежей)\n`;
-        response += `└─ Мгновенные переводы между банками\n`;
-        response += `└─ Работает 24/7\n`;
-        response += `└─ Можно переводить по номеру телефона\n`;
-        
-        response += `**3. Сколько действует абонемент?**\n`;
-        response += `└─ 📅 Месячный: 30 дней с даты покупки\n`;
-        response += `└─ 🎫 Разовое посещение: неограниченный срок\n\n`;
-        
-        response += `**4. Что делать если не успеваю использовать?**\n`;
-        response += `└─ 📅 Месячный: не продлевается\n`;
-        response += `└─ 🎫 Разовое посещение: действует бессрочно\n\n`;
-        
-        response += `**5. Можно ли передать абонемент другому?**\n`;
-        response += `└─ ⚠️ Нет, абонемент привязан к пользователю\n\n`;
-        
-        response += `**6. Как быстро активируется абонемент?**\n`;
-        response += `└─ 💰 Наличные: сразу после оплаты\n`;
-        response += `└─ 🏦 Перевод: до 15 минут после получения чека\n`;
-        
-        response += `**📞 КОНТАКТЫ ДЛЯ ВОПРОСОВ:**\n`;
-        response += `Телефон: +7 (925) 225-13-36\n`;
-        
-        await ctx.reply(response, {
-            format: 'markdown',
-            attachments: [keyboard]
-        });
-        
-    } catch (error) {
-        logToFile(`❌ Ошибка user_buy_faq: ${error.message}`);
-    }
-});
 
 // 5. ПОМОЩЬ (только команды)
 bot.action('user_help', async (ctx) => {
@@ -3145,7 +2945,16 @@ bot.action('user_buy_single', async (ctx) => {
             `**📞 ДЛЯ ОПЛАТЫ:**\n` +
             `Свяжитесь с администратором:\n` +
             `└─ 📱 +7 (925) 225-13-36\n` +
-                        
+            
+            `**💡 КОГДА ВЫБРАТЬ Разовое посещение:**\n` +
+            `✅ Если впервые на тренировке\n` +
+            `✅ Если ходите редко (1 раз в неделю)\n` +
+            `✅ Если не уверены в регулярности\n` +
+            
+            `**✅ ПОСЛЕ ОПЛАТЫ:**\n` +
+            `1. Абонемент будет активирован\n` +
+            `2. Можно записаться на тренировку!\n\n` +
+            
             `*Вы подтверждаете оплату разового посещения?*`,
             {
                 format: 'markdown',
@@ -3344,10 +3153,10 @@ bot.action(/^pay_cash_(monthly|single)$/, async (ctx) => {
             `└─ Сумма к оплате: **${amount} руб.**\n\n` +
             
             `**📝 ИНСТРУКЦИЯ ПО ОПЛАТЕ:**\n` +
-            `1. Приходите на тренировку\n` +
-            `2. Сообщите: __"Я оплачиваю наличными"__\n` +
-            `3. Оплатите __${amount} руб.__ наличными\n` +
-            `4. После __оплаты__ нажмите кнопку ниже\n\n` +
+            `1. **Приходите на тренировку**\n` +
+            `2. **Сообщите:** "Я оплачиваю наличными"\n` +
+            `3. **Оплатите ${amount} руб.** наличными\n` +
+            `4. **После оплаты** нажмите кнопку ниже\n\n` +
             
             `**📞 КОНТАКТЫ АДМИНИСТРАТОРА:**\n` +
             `Телефон: +7 (925) 225-13-36\n` +
@@ -4199,8 +4008,213 @@ bot.action('ожидающие_платежи', async (ctx) => {
     }
 });
 
+// 1. Обработчик подтверждения отклонения (должен быть ПЕРВЫМ)
+bot.action(/^admin_reject_payment_confirm_(.+)$/, async (ctx) => {
+    try {
+        console.log('=== ОБРАБОТЧИК CONFIRM (ПОДТВЕРЖДЕНИЕ ОТКЛОНЕНИЯ) ===');
+        console.log('PaymentId:', ctx.match[1]);
+        
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const paymentId = ctx.match[1];
+        const payment = pendingPayments[paymentId];
+        
+        if (!payment) {
+            await ctx.reply('❌ Платеж не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        // Удаляем платеж
+        delete pendingPayments[paymentId];
+        
+        // Отправляем уведомление пользователю
+        try {
+            await bot.api.sendMessageToUser(
+                payment.userId,
+                `**❌ ПЛАТЕЖ ОТКЛОНЕН**\n\n` +
+                `Ваш платеж на сумму **${payment.amount} руб.** был отклонен администратором.\n\n` +
+                `**💡 ВОЗМОЖНЫЕ ПРИЧИНЫ:**\n` +
+                `• Деньги не поступили на счет\n` +
+                `• Неверная сумма перевода\n` +
+                `• Техническая ошибка\n` +
+                `• Другая причина\n\n` +
+                `**🎯 ЧТО ДЕЛАТЬ:**\n` +
+                `1. Проверьте статус перевода в приложении банка\n` +
+                `2. Свяжитесь с администратором: +7 (925) 225-13-36\n` +
+                `3. Создайте новый заказ через /купить\n\n` +
+                `**Приносим извинения за неудобства!**`,
+                { format: 'markdown' }
+            );
+        } catch (userError) {
+            logToFile(`⚠️ Не удалось отправить уведомление пользователю: ${userError.message}`);
+        }
+        
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('« Назад к платежам', 'ожидающие_платежи')
+            ]
+        ]);
+        
+        await ctx.reply(
+            `**❌ ПЛАТЕЖ ОТКЛОНЕН**\n\n` +
+            `**🆔 ID платежа:** ${paymentId}\n` +
+            `**👤 Пользователь:** ${payment.userName}\n` +
+            `**💰 Сумма:** ${payment.amount} руб.\n\n` +
+            
+            `**📋 ПЛАТЕЖ УДАЛЕН ИЗ СИСТЕМЫ**\n\n` +
+            `**📨 УВЕДОМЛЕНИЕ:**\n` +
+            `Пользователь получил сообщение об отклонении платежа.\n\n` +
+            
+            `**✅ ОПЕРАЦИЯ ЗАВЕРШЕНА**`,
+            {
+                format: 'markdown',
+                attachments: [keyboard]
+            }
+        );
+        
+        logToFile(`❌ Админ ${adminId} отклонил платеж ${paymentId} для пользователя ${payment.userName}`);
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_reject_payment_confirm: ${error.message}`);
+    }
+});
+
+// 2. Обработчик выбора причины отклонения (должен быть ВТОРЫМ)
+bot.action(/^admin_reject_payment_(.+)$/, async (ctx) => {
+    try {
+        console.log('=== ОБРАБОТЧИК REJECT (ВЫБОР ПРИЧИНЫ) ===');
+        console.log('PaymentId:', ctx.match[1]);
+        
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const paymentId = ctx.match[1];
+        const payment = pendingPayments[paymentId];
+        
+        if (!payment) {
+            await ctx.reply('❌ Платеж не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('✅ Да, отклонить', `admin_reject_payment_confirm_${paymentId}`),
+                Keyboard.button.callback('❌ Нет, отмена', `admin_view_payment_${paymentId}`)
+            ]
+        ]);
+        
+        await ctx.reply(
+            `**❌ ОТКЛОНЕНИЕ ПЛАТЕЖА**\n\n` +
+            `**⚠️ ВНИМАНИЕ:**\n` +
+            `Вы собираетесь отклонить платеж.\n\n` +
+            
+            `**📋 ИНФОРМАЦИЯ О ПЛАТЕЖЕ:**\n` +
+            `Пользователь: **${payment.userName}**\n` +
+            `Сумма: ${payment.amount} руб.\n` +
+            `Тип: ${payment.subscriptionType === 'monthly' ? 'Месячный' : 'Разовое посещение'}\n` +
+            `Способ оплаты: ${payment.paymentMethod === 'cash' ? 'Наличные' : 'Банковский перевод'}\n\n` +
+            
+            `**💡 ПРИЧИНЫ ОТКЛОНЕНИЯ:**\n` +
+            `1. Деньги не поступили\n` +
+            `2. Неверная сумма\n` +
+            `3. Ошибка в заказе\n` +
+            `4. Другая причина\n\n` +
+            
+            `**📨 ПОСЛЕ ОТКЛОНЕНИЯ:**\n` +
+            `1. Пользователь получит уведомление\n` +
+            `2. Платеж будет удален из системы\n` +
+            `3. Пользователь может создать новый заказ\n\n` +
+            
+            `**Вы уверены, что хотите отклонить этот платеж?**`,
+            {
+                format: 'markdown',
+                attachments: [keyboard]
+            }
+        );
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_reject_payment: ${error.message}`);
+    }
+});
+
+// Отклонение платежа
+bot.action(/^admin_reject_payment_(.+)$/, async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const paymentId = ctx.match[1];
+        const payment = pendingPayments[paymentId];
+        
+        if (!payment) {
+            await ctx.reply('❌ Платеж не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('✅ Да, отклонить', `admin_reject_payment_confirm_${paymentId}`),
+                Keyboard.button.callback('❌ Нет, отмена', `admin_view_payment_${paymentId}`)
+            ]
+        ]);
+        
+        await ctx.reply(
+            `**❌ ОТКЛОНЕНИЕ ПЛАТЕЖА**\n\n` +
+            `**⚠️ ВНИМАНИЕ:**\n` +
+            `Вы собираетесь отклонить платеж.\n\n` +
+            
+            `**📋 ИНФОРМАЦИЯ О ПЛАТЕЖЕ:**\n` +
+            `Пользователь: **${payment.userName}**\n` +
+            `Сумма: ${payment.amount} руб.\n` +
+            `Тип: ${payment.subscriptionType === 'monthly' ? 'Месячный' : 'Разовое посещение'}\n` +
+            `Способ оплаты: ${payment.paymentMethod === 'cash' ? 'Наличные' : 'Банковский перевод'}\n\n` +
+            
+            `**💡 ПРИЧИНЫ ОТКЛОНЕНИЯ:**\n` +
+            `1. Деньги не поступили\n` +
+            `2. Неверная сумма\n` +
+            `3. Ошибка в заказе\n` +
+            `4. Другая причина\n\n` +
+            
+            `**📨 ПОСЛЕ ОТКЛОНЕНИЯ:**\n` +
+            `1. Пользователь получит уведомление\n` +
+            `2. Платеж будет удален из системы\n` +
+            `3. Пользователь может создать новый заказ\n\n` +
+            
+            `**Вы уверены, что хотите отклонить этот платеж?**`,
+            {
+                format: 'markdown',
+                attachments: [keyboard]
+            }
+        );
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_reject_payment: ${error.message}`);
+    }
+});
 // Просмотр деталей платежа
-bot.action(/^admin_view_payment_(\w+)$/, async (ctx) => {
+bot.action(/^admin_view_payment_(.+)$/, async (ctx) => {
     try {
         const adminId = getUserId(ctx);
         if (!isAdmin(adminId)) return;
@@ -4323,7 +4337,7 @@ bot.action(/^admin_view_payment_(\w+)$/, async (ctx) => {
 });
 
 // Подтверждение оплаты администратором
-bot.action(/^admin_confirm_payment_(\w+)$/, async (ctx) => {
+bot.action(/^admin_confirm_payment_(.+)$/, async (ctx) => {
     try {
         const adminId = getUserId(ctx);
         if (!isAdmin(adminId)) return;
@@ -4428,143 +4442,6 @@ bot.action(/^admin_confirm_payment_(\w+)$/, async (ctx) => {
     }
 });
 
-// Отклонение платежа
-bot.action(/^admin_reject_payment_(\w+)$/, async (ctx) => {
-    try {
-        const adminId = getUserId(ctx);
-        if (!isAdmin(adminId)) return;
-        
-        const paymentId = ctx.match[1];
-        const payment = pendingPayments[paymentId];
-        
-        if (!payment) {
-            await ctx.reply('❌ Платеж не найден', { format: 'markdown' });
-            return;
-        }
-        
-        // Удаляем предыдущее сообщение
-        try {
-            await ctx.deleteMessage();
-        } catch (deleteError) {
-            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
-        }
-        
-        const keyboard = Keyboard.inlineKeyboard([
-            [
-                Keyboard.button.callback('✅ Да, отклонить', `admin_reject_payment_confirm_${paymentId}`),
-                Keyboard.button.callback('❌ Нет, отмена', `admin_view_payment_${paymentId}`)
-            ]
-        ]);
-        
-        await ctx.reply(
-            `**❌ ОТКЛОНЕНИЕ ПЛАТЕЖА**\n\n` +
-            `**⚠️ ВНИМАНИЕ:**\n` +
-            `Вы собираетесь отклонить платеж.\n\n` +
-            
-            `**📋 ИНФОРМАЦИЯ О ПЛАТЕЖЕ:**\n` +
-            `Пользователь: **${payment.userName}**\n` +
-            `Сумма: ${payment.amount} руб.\n` +
-            `Тип: ${payment.subscriptionType === 'monthly' ? 'Месячный' : 'Разовое посещение'}\n` +
-            `Способ оплаты: ${payment.paymentMethod === 'cash' ? 'Наличные' : 'Банковский перевод'}\n\n` +
-            
-            `**💡 ПРИЧИНЫ ОТКЛОНЕНИЯ:**\n` +
-            `1. Деньги не поступили\n` +
-            `2. Неверная сумма\n` +
-            `3. Ошибка в заказе\n` +
-            `4. Другая причина\n\n` +
-            
-            `**📨 ПОСЛЕ ОТКЛОНЕНИЯ:**\n` +
-            `1. Пользователь получит уведомление\n` +
-            `2. Платеж будет удален из системы\n` +
-            `3. Пользователь может создать новый заказ\n\n` +
-            
-            `**Вы уверены, что хотите отклонить этот платеж?**`,
-            {
-                format: 'markdown',
-                attachments: [keyboard]
-            }
-        );
-        
-    } catch (error) {
-        logToFile(`❌ Ошибка admin_reject_payment: ${error.message}`);
-    }
-});
-
-// Подтверждение отклонения платежа
-bot.action(/^admin_reject_payment_confirm_(\w+)$/, async (ctx) => {
-    try {
-        const adminId = getUserId(ctx);
-        if (!isAdmin(adminId)) return;
-        
-        const paymentId = ctx.match[1];
-        const payment = pendingPayments[paymentId];
-        
-        if (!payment) {
-            await ctx.reply('❌ Платеж не найден', { format: 'markdown' });
-            return;
-        }
-        
-        // Удаляем предыдущее сообщение
-        try {
-            await ctx.deleteMessage();
-        } catch (deleteError) {
-            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
-        }
-        
-        // Удаляем платеж
-        delete pendingPayments[paymentId];
-        
-        // Отправляем уведомление пользователю
-        try {
-            await bot.api.sendMessageToUser(
-                payment.userId,
-                `**❌ ПЛАТЕЖ ОТКЛОНЕН**\n\n` +
-                `Ваш платеж на сумму **${payment.amount} руб.** был отклонен администратором.\n\n` +
-                `**💡 ВОЗМОЖНЫЕ ПРИЧИНЫ:**\n` +
-                `• Деньги не поступили на счет\n` +
-                `• Неверная сумма перевода\n` +
-                `• Техническая ошибка\n` +
-                `• Другая причина\n\n` +
-                `**🎯 ЧТО ДЕЛАТЬ:**\n` +
-                `1. Проверьте статус перевода в приложении банка\n` +
-                `2. Свяжитесь с администратором: +7 (925) 225-13-36\n` +
-                `3. Создайте новый заказ через /купить\n\n` +
-                `**Приносим извинения за неудобства!**`,
-                { format: 'markdown' }
-            );
-        } catch (userError) {
-            logToFile(`⚠️ Не удалось отправить уведомление пользователю: ${userError.message}`);
-        }
-        
-        const keyboard = Keyboard.inlineKeyboard([
-            [
-                Keyboard.button.callback('« Назад к платежам', 'ожидающие_платежи')
-            ]
-        ]);
-        
-        await ctx.reply(
-            `**❌ ПЛАТЕЖ ОТКЛОНЕН**\n\n` +
-            `**🆔 ID платежа:** ${paymentId}\n` +
-            `**👤 Пользователь:** ${payment.userName}\n` +
-            `**💰 Сумма:** ${payment.amount} руб.\n\n` +
-            
-            `**📋 ПЛАТЕЖ УДАЛЕН ИЗ СИСТЕМЫ**\n\n` +
-            `**📨 УВЕДОМЛЕНИЕ:**\n` +
-            `Пользователь получил сообщение об отклонении платежа.\n\n` +
-            
-            `**✅ ОПЕРАЦИЯ ЗАВЕРШЕНА**`,
-            {
-                format: 'markdown',
-                attachments: [keyboard]
-            }
-        );
-        
-        logToFile(`❌ Админ ${adminId} отклонил платеж ${paymentId} для пользователя ${payment.userName}`);
-        
-    } catch (error) {
-        logToFile(`❌ Ошибка admin_reject_payment_confirm: ${error.message}`);
-    }
-});
 
 // Связь с пользователем
 bot.action(/^admin_contact_user_(\d+)$/, async (ctx) => {
@@ -7465,9 +7342,11 @@ bot.action('admin_clear_history_confirm_all', async (ctx) => {
 });
 
 // ========== ЗАПУСК БОТА ==========
+logToFile('🤖 Бот запускается...');
+
 bot.start().then(() => {
-    logToFile('🤖 Бот запущен и готов к работе!');
-}).catch((error) => {
-    logToFile(`❌ Ошибка запуска бота: ${error.message}`);
+    logToFile('✅ Бот успешно запущен!');
+}).catch(err => {
+    logToFile(`❌ Ошибка запуска бота: ${err.message}`);
     process.exit(1);
 });

@@ -4500,7 +4500,584 @@ bot.action(/^admin_contact_user_(\d+)$/, async (ctx) => {
         logToFile(`❌ Ошибка admin_contact_user: ${error.message}`);
     }
 });
+// Обработчик кнопки "Добавить абонемент"
+bot.action('admin_add_subscription', async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        // Получаем список пользователей (например, последние 20 активных)
+        const users = Object.entries(userStats)
+            .sort((a, b) => new Date(b[1].lastActivity) - new Date(a[1].lastActivity))
+            .slice(0, 20);
+        
+        if (users.length === 0) {
+            await ctx.reply(
+                '**📭 НЕТ ПОЛЬЗОВАТЕЛЕЙ**\n\n' +
+                'В системе пока нет пользователей.',
+                { format: 'markdown' }
+            );
+            return;
+        }
+        
+        // Создаем клавиатуру с пользователями
+        const keyboardButtons = [];
+        
+        users.forEach(([userId, user], index) => {
+            const userName = user.name || `Пользователь ${userId}`;
+            const visited = user.attended || 0;
+            const lastActive = new Date(user.lastActivity).toLocaleDateString('ru-RU');
+            
+            keyboardButtons.push([
+                Keyboard.button.callback(
+                    `${index + 1}. ${userName} (📅 ${lastActive}, 🏃 ${visited} пос.)`,
+                    `admin_select_user_${userId}`
+                )
+            ]);
+        });
+        
+        // Кнопки назад и обновления
+        keyboardButtons.push([
+            Keyboard.button.callback('🔄 Обновить список', 'admin_add_subscription'),
+            Keyboard.button.callback('« В админ панель', 'admin_back')
+        ]);
+        
+        const keyboard = Keyboard.inlineKeyboard(keyboardButtons);
+        
+        await ctx.reply(
+            `**📝 ВЫБОР ПОЛЬЗОВАТЕЛЯ ДЛЯ АБОНЕМЕНТА**\n\n` +
+            `**Всего пользователей:** ${users.length}\n\n` +
+            `**📋 ИНФОРМАЦИЯ:**\n` +
+            `• Выберите пользователя для добавления абонемента\n` +
+            `• Показаны последние 20 активных пользователей\n` +
+            `• Можно обновить список кнопкой ниже\n\n` +
+            `**👇 Выберите пользователя:**`,
+            {
+                format: 'markdown',
+                attachments: [keyboard]
+            }
+        );
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_add_subscription: ${error.message}`);
+    }
+});
+// Обработчик выбора пользователя
+bot.action(/^admin_select_user_(\d+)$/, async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const userId = ctx.match[1];
+        const user = userStats[userId];
+        
+        if (!user) {
+            await ctx.reply('❌ Пользователь не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const userName = user.name || `Пользователь ${userId}`;
+        const currentSubscription = userSubscriptions[userId];
+        
+        // Создаем клавиатуру с типами абонементов
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('🎫 Разовое посещение', `admin_select_subscription_type_${userId}_single`),
+                Keyboard.button.callback('📅 Месячный абонемент', `admin_select_subscription_type_${userId}_monthly`)
+            ],
+            [
+                Keyboard.button.callback('« Назад к выбору пользователя', 'admin_add_subscription')
+            ]
+        ]);
+        
+        let response = `**📝 ВЫБОР ТИПА АБОНЕМЕНТА**\n\n`;
+        
+        response += `**👤 ПОЛЬЗОВАТЕЛЬ:**\n`;
+        response += `Имя: **${userName}**\n`;
+        response += `ID: ${userId}\n`;
+        response += `Посещений: ${user.attended || 0}\n`;
+        response += `Последняя активность: ${new Date(user.lastActivity).toLocaleDateString('ru-RU')}\n\n`;
+        
+        if (currentSubscription) {
+            response += `**⚠️ ВНИМАНИЕ:**\n`;
+            response += `У пользователя уже есть активный абонемент!\n`;
+            response += `Тип: ${currentSubscription.type === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n`;
+            response += `Осталось занятий: ${currentSubscription.lessons}\n`;
+            response += `Дата начала: ${new Date(currentSubscription.startDate).toLocaleDateString('ru-RU')}\n\n`;
+            
+            response += `**💡 РЕКОМЕНДАЦИЯ:**\n`;
+            if (currentSubscription.type === 'monthly') {
+                response += `Можно добавить занятия к текущему абонементу.\n`;
+            }
+            response += `Или создать новый абонемент (старый будет заменен).\n\n`;
+        }
+        
+        response += `**🎫 ТИПЫ АБОНЕМЕНТОВ:**\n`;
+        response += `• **Разовое посещение** - 1 занятие\n`;
+        response += `• **Месячный абонемент** - 8 занятий на 30 дней\n\n`;
+        
+        response += `**👇 Выберите тип абонемента:**`;
+        
+        await ctx.reply(response, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_select_user: ${error.message}`);
+    }
+});
+// Обработчик выбора типа абонемента
+bot.action(/^admin_select_subscription_type_(\d+)_(.+)$/, async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const userId = ctx.match[1];
+        const subscriptionType = ctx.match[2]; // 'single' или 'monthly'
+        const user = userStats[userId];
+        
+        if (!user) {
+            await ctx.reply('❌ Пользователь не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const userName = user.name || `Пользователь ${userId}`;
+        
+        // Определяем параметры в зависимости от типа
+        let lessonOptions = [];
+        
+        if (subscriptionType === 'single') {
+            // Разовые посещения
+            lessonOptions = [
+                { lessons: 1, price: 700 },
+                { lessons: 2, price: 1400 }
+            ];
+        } else { 
+            // Месячный абонемент
+            lessonOptions = [
+                { lessons: 2, price: 1025 },   // 2 занятия
+                { lessons: 6, price: 3300 },   // 6 занятий
+                { lessons: 8, price: 4400 },   // 8 занятий (стандартный)
+                { lessons: 8, price: 4100, discount: true } // 8 занятий со скидкой
+            ];
+        }
+        
+        // Создаем клавиатуру с количеством занятий
+        const keyboardButtons = [];
+        
+        // Создаем кнопки в зависимости от количества опций
+        if (lessonOptions.length <= 2) {
+            // Для 1-2 опций в один ряд
+            const row = lessonOptions.map(option => {
+                const label = option.discount ? 
+                    `🎁 ${option.lessons} занятий - ${option.price} руб. (скидка!)` :
+                    `${option.lessons} занятий - ${option.price} руб.`;
+                
+                return Keyboard.button.callback(
+                    label,
+                    `admin_select_lessons_${userId}_${subscriptionType}_${option.lessons}_${option.price}_${option.discount ? 'discount' : 'regular'}`
+                );
+            });
+            keyboardButtons.push(row);
+        } else {
+            // Для большего количества опций распределяем по рядам
+            const firstRow = lessonOptions.slice(0, 2).map(option => {
+                const label = option.discount ? 
+                    `🎁 ${option.lessons} занятий - ${option.price} руб.` :
+                    `${option.lessons} занятий - ${option.price} руб.`;
+                
+                return Keyboard.button.callback(
+                    label,
+                    `admin_select_lessons_${userId}_${subscriptionType}_${option.lessons}_${option.price}_${option.discount ? 'discount' : 'regular'}`
+                );
+            });
+            keyboardButtons.push(firstRow);
+            
+            const secondRow = lessonOptions.slice(2).map(option => {
+                const label = option.discount ? 
+                    `🎁 ${option.lessons} занятий - ${option.price} руб. (скидка!)` :
+                    `${option.lessons} занятий - ${option.price} руб.`;
+                
+                return Keyboard.button.callback(
+                    label,
+                    `admin_select_lessons_${userId}_${subscriptionType}_${option.lessons}_${option.price}_${option.discount ? 'discount' : 'regular'}`
+                );
+            });
+            keyboardButtons.push(secondRow);
+        }
+        
+        // Кнопки назад
+        keyboardButtons.push([
+            Keyboard.button.callback('« Назад к выбору типа', `admin_select_user_${userId}`)
+        ]);
+        
+        const keyboard = Keyboard.inlineKeyboard(keyboardButtons);
+        
+        let response = `**📝 ВЫБОР КОЛИЧЕСТВА ЗАНЯТИЙ**\n\n`;
+        
+        response += `**👤 ПОЛЬЗОВАТЕЛЬ:** ${userName}\n`;
+        response += `**📋 ТИП АБОНЕМЕНТА:** ${subscriptionType === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n\n`;
+        
+        if (subscriptionType === 'single') {
+            response += `**🎫 РАЗОВЫЕ ПОСЕЩЕНИЯ:**\n`;
+            response += `• Цена за занятие: 700 руб.\n`;
+            response += `• Срок действия: неограничен\n`;
+            response += `• Можно использовать в любое время\n\n`;
+            
+            response += `**💰 СТОИМОСТЬ:**\n`;
+            response += `• 1 занятие: **700 руб.**\n`;
+            response += `• 2 занятия: **1400 руб.**\n`;
+            
+        } else {
+            response += `**📅 МЕСЯЧНЫЙ АБОНЕМЕНТ:**\n`;
+            response += `• Действует 30 дней с момента активации\n`;
+            response += `• Можно посещать любые тренировки\n`;
+            response += `• Неиспользованные занятия сгорают\n\n`;
+            
+            response += `**💰 СТОИМОСТЬ:**\n`;
+            response += `• 2 занятия: **1025 руб.** (512.5 руб./занятие)\n`;
+            response += `• 6 занятий: **3300 руб.** (550 руб./занятие)\n`;
+            response += `• 8 занятий: **4400 руб.** (550 руб./занятие)\n`;
+            response += `• 🎁 8 занятий со скидкой: **4100 руб.** (512.5 руб./занятие)\n`;
+            
+            response += `\n**💡 ВЫГОДА:**\n`;
+            response += `• 8 занятий со скидкой экономит **300 руб.**\n`;
+            response += `• По сравнению со стандартным 8-занятиями\n`;
+        }
+        
+        response += `\n**👇 Выберите количество занятий:**`;
+        
+        await ctx.reply(response, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_select_subscription_type: ${error.message}`);
+    }
+});
 
+// Обработчик выбора количества занятий
+bot.action(/^admin_select_lessons_(\d+)_(.+)_(\d+)_(\d+)_(.+)$/, async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const userId = ctx.match[1];
+        const subscriptionType = ctx.match[2]; // 'single' или 'monthly'
+        const lessons = parseInt(ctx.match[3]);
+        const amount = parseInt(ctx.match[4]);
+        const discountType = ctx.match[5]; // 'regular' или 'discount'
+        const user = userStats[userId];
+        
+        if (!user) {
+            await ctx.reply('❌ Пользователь не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const userName = user.name || `Пользователь ${userId}`;
+        
+        // Проверяем текущий абонемент
+        const currentSubscription = userSubscriptions[userId];
+        
+        // Создаем клавиатуру для подтверждения
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('✅ Да, добавить абонемент', `admin_confirm_add_subscription_${userId}_${subscriptionType}_${lessons}_${amount}_${discountType}`),
+                Keyboard.button.callback('❌ Нет, отмена', `admin_select_user_${userId}`)
+            ]
+        ]);
+        
+        let response = `**✅ ПОДТВЕРЖДЕНИЕ ДОБАВЛЕНИЯ АБОНЕМЕНТА**\n\n`;
+        
+        response += `**👤 ПОЛЬЗОВАТЕЛЬ:** ${userName}\n`;
+        response += `**📋 ТИП АБОНЕМЕНТА:** ${subscriptionType === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n`;
+        response += `**🎫 КОЛИЧЕСТВО ЗАНЯТИЙ:** ${lessons}\n`;
+        response += `**💰 СТОИМОСТЬ:** ${amount} руб.\n`;
+        
+        if (discountType === 'discount') {
+            response += `**🎁 ТИП:** Абонемент со скидкой\n`;
+            
+            // Рассчитываем экономию
+            let regularPrice = 0;
+            if (lessons === 8) regularPrice = 4400;
+            
+            if (regularPrice > 0) {
+                const savings = regularPrice - amount;
+                response += `**💎 ЭКОНОМИЯ:** ${savings} руб.\n`;
+            }
+        }
+        
+        response += `\n`;
+        
+        if (currentSubscription) {
+            response += `**⚠️ ВНИМАНИЕ:**\n`;
+            response += `У пользователя уже есть активный абонемент!\n`;
+            response += `Тип: ${currentSubscription.type === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n`;
+            response += `Осталось занятий: ${currentSubscription.lessons}\n`;
+            response += `Дата начала: ${new Date(currentSubscription.startDate).toLocaleDateString('ru-RU')}\n\n`;
+            
+            response += `**💡 ДЕЙСТВИЕ:**\n`;
+            response += `Текущий абонемент будет **ЗАМЕНЕН** на новый!\n`;
+            response += `Неиспользованные занятия сгорят.\n\n`;
+        }
+        
+        response += `**📅 ПАРАМЕТРЫ НОВОГО АБОНЕМЕНТА:**\n`;
+        response += `• Дата активации: ${new Date().toLocaleDateString('ru-RU')}\n`;
+        
+        if (subscriptionType === 'monthly') {
+            const endDate = new Date();
+            endDate.setDate(endDate.getDate() + 30);
+            response += `• Действует до: ${endDate.toLocaleDateString('ru-RU')}\n`;
+            
+            // Рассчитываем цену за занятие
+            const pricePerLesson = Math.round(amount / lessons);
+            response += `• Цена за занятие: ${pricePerLesson} руб.\n`;
+        } else {
+            response += `• Срок действия: неограничен\n`;
+            response += `• Цена за занятие: ${amount / lessons} руб.\n`;
+        }
+        
+        response += `• Занятий: ${lessons}\n`;
+        response += `• Стоимость: ${amount} руб.\n\n`;
+        
+        if (discountType === 'discount') {
+            response += `**🎁 **Это абонемент со специальной скидкой!\n\n`;
+        }
+        
+        response += `**Вы уверены, что хотите добавить этот абонемент?**`;
+        
+        await ctx.reply(response, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_select_lessons: ${error.message}`);
+    }
+});
+
+// Обработчик подтверждения добавления абонемента
+bot.action(/^admin_confirm_add_subscription_(\d+)_(.+)_(\d+)_(\d+)_(.+)$/, async (ctx) => {
+    try {
+        const adminId = getUserId(ctx);
+        if (!isAdmin(adminId)) return;
+        
+        const userId = ctx.match[1];
+        const subscriptionType = ctx.match[2];
+        const lessons = parseInt(ctx.match[3]);
+        const amount = parseInt(ctx.match[4]);
+        const discountType = ctx.match[5]; // 'regular' или 'discount'
+        const user = userStats[userId];
+        
+        if (!user) {
+            await ctx.reply('❌ Пользователь не найден', { format: 'markdown' });
+            return;
+        }
+        
+        // Удаляем предыдущее сообщение
+        try {
+            await ctx.deleteMessage();
+        } catch (deleteError) {
+            logToFile(`⚠️ Не удалось удалить сообщение: ${deleteError.message}`);
+        }
+        
+        const userName = user.name || `Пользователь ${userId}`;
+        const currentSubscription = userSubscriptions[userId];
+        
+        // Сохраняем старый абонемент для истории
+        if (currentSubscription) {
+            if (!user.subscriptionHistory) {
+                user.subscriptionHistory = [];
+            }
+            user.subscriptionHistory.push({
+                ...currentSubscription,
+                replacedAt: new Date().toISOString(),
+                replacedBy: {
+                    type: subscriptionType,
+                    lessons: lessons,
+                    cost: amount,
+                    discount: discountType === 'discount',
+                    startDate: new Date().toISOString()
+                }
+            });
+        }
+        
+        // Создаем новый абонемент
+        userSubscriptions[userId] = {
+            type: subscriptionType,
+            lessons: lessons,
+            cost: amount,
+            startDate: new Date().toISOString(),
+            lastUsed: null,
+            addedByAdmin: true,
+            adminId: adminId,
+            addedAt: new Date().toISOString(),
+            discount: discountType === 'discount' // Добавляем флаг скидки
+        };
+        
+        // Обновляем историю в статистике
+        if (!user.subscriptionHistory) {
+            user.subscriptionHistory = [];
+        }
+        user.subscriptionHistory.push({
+            date: new Date().toISOString(),
+            type: subscriptionType,
+            lessons: lessons,
+            cost: amount,
+            startDate: new Date().toISOString(),
+            addedByAdmin: true,
+            adminId: adminId,
+            discount: discountType === 'discount'
+        });
+        
+        // Сохраняем данные
+        saveSubscriptions();
+        saveUserStats();
+        
+        // Отправляем уведомление пользователю
+        try {
+            let userMessage = `**🎉 ВАМ ДОБАВЛЕН АБОНЕМЕНТ!**\n\n`;
+            userMessage += `Администратор добавил вам новый абонемент.\n\n`;
+            userMessage += `**📋 ДЕТАЛИ АБОНЕМЕНТА:**\n`;
+            userMessage += `• Тип: ${subscriptionType === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n`;
+            userMessage += `• Занятий: ${lessons}\n`;
+            
+            if (discountType === 'discount') {
+                userMessage += `• 🎁 **Абонемент со скидкой**\n`;
+                
+                // Показываем экономию
+                if (lessons === 8) {
+                    const regularPrice = 4400;
+                    const savings = regularPrice - amount;
+                    userMessage += `• 💎 **Экономия: ${savings} руб.**\n`;
+                }
+            }
+            
+            if (subscriptionType === 'monthly') {
+                const endDate = new Date();
+                endDate.setDate(endDate.getDate() + 30);
+                userMessage += `• Действует до: ${endDate.toLocaleDateString('ru-RU')}\n`;
+                
+                // Цена за занятие
+                const pricePerLesson = Math.round(amount / lessons);
+                userMessage += `• Цена за занятие: ${pricePerLesson} руб.\n`;
+            } else {
+                userMessage += `• Срок действия: неограничен\n`;
+                userMessage += `• Цена за занятие: ${amount / lessons} руб.\n`;
+            }
+            
+            userMessage += `• Дата активации: ${new Date().toLocaleDateString('ru-RU')}\n`;
+            userMessage += `• Стоимость: ${amount} руб.\n\n`;
+            
+            if (currentSubscription) {
+                userMessage += `**📝 ПРИМЕЧАНИЕ:**\n`;
+                userMessage += `Предыдущий абонемент был заменен на новый.\n\n`;
+            }
+            
+            userMessage += `**🎯 Теперь вы можете записываться на тренировки!**\n`;
+            userMessage += `Используйте /записаться или кнопку в опросе.\n\n`;
+            userMessage += `Спасибо, что занимаетесь у нас! 💪`;
+            
+            await bot.api.sendMessageToUser(userId, userMessage, { format: 'markdown' });
+        } catch (userError) {
+            logToFile(`⚠️ Не удалось отправить уведомление пользователю: ${userError.message}`);
+        }
+        
+        // Создаем клавиатуру
+        const keyboard = Keyboard.inlineKeyboard([
+            [
+                Keyboard.button.callback('➕ Добавить еще абонемент', 'admin_add_subscription'),
+                Keyboard.button.callback('« В админ панель', 'admin_back')
+            ]
+        ]);
+        
+        let response = `**✅ АБОНЕМЕНТ УСПЕШНО ДОБАВЛЕН!**\n\n`;
+        
+        response += `**👤 ПОЛЬЗОВАТЕЛЬ:** ${userName}\n`;
+        response += `**📋 ТИП АБОНЕМЕНТА:** ${subscriptionType === 'monthly' ? '📅 Месячный' : '🎫 Разовое посещение'}\n`;
+        response += `**🎫 КОЛИЧЕСТВО ЗАНЯТИЙ:** ${lessons}\n`;
+        response += `**💰 СТОИМОСТЬ:** ${amount} руб.\n`;
+        
+        if (discountType === 'discount') {
+            response += `**🎁 ТИП:** Абонемент со скидкой\n`;
+            
+            // Показываем экономию
+            if (lessons === 8) {
+                const regularPrice = 4400;
+                const savings = regularPrice - amount;
+                response += `**💎 ЭКОНОМИЯ:** ${savings} руб.\n`;
+            }
+        }
+        
+        response += `**📅 ДАТА АКТИВАЦИИ:** ${new Date().toLocaleDateString('ru-RU')}\n`;
+        
+        if (subscriptionType === 'monthly') {
+            const endDate = new Date();
+            endDate.setDate(endDate.getDate() + 30);
+            response += `**⏰ ДЕЙСТВУЕТ ДО:** ${endDate.toLocaleDateString('ru-RU')}\n`;
+            
+            // Цена за занятие
+            const pricePerLesson = Math.round(amount / lessons);
+            response += `**🏷️ ЦЕНА ЗА ЗАНЯТИЕ:** ${pricePerLesson} руб.\n`;
+        }
+        
+        response += `\n**✅ ВЫПОЛНЕННЫЕ ДЕЙСТВИЯ:**\n`;
+        response += `1. Абонемент создан и активирован ✅\n`;
+        response += `2. Данные сохранены в системе ✅\n`;
+        response += `3. Пользователь получил уведомление ✅\n`;
+        
+        if (currentSubscription) {
+            response += `4. Старый абонемент заменен ✅\n`;
+        }
+        
+        if (discountType === 'discount') {
+            response += `5. Скидка применена ✅\n`;
+        }
+        
+        response += `\n**🎯 ОПЕРАЦИЯ УСПЕШНО ЗАВЕРШЕНА**`;
+        
+        await ctx.reply(response, {
+            format: 'markdown',
+            attachments: [keyboard]
+        });
+        
+        logToFile(`✅ Админ ${adminId} добавил абонемент пользователю ${userName} (ID: ${userId}): ${subscriptionType}, ${lessons} занятий, ${amount} руб.${discountType === 'discount' ? ' (со скидкой)' : ''}`);
+        
+    } catch (error) {
+        logToFile(`❌ Ошибка admin_confirm_add_subscription: ${error.message}`);
+        await ctx.reply('❌ Произошла ошибка при добавлении абонемента', { format: 'markdown' });
+    }
+});
 // Команда для отправки сообщения пользователю (для админов)
 bot.command('msg', async (ctx) => {
     try {
@@ -5096,6 +5673,7 @@ bot.action('admin_subs', async (ctx) => {
                 Keyboard.button.callback('🎫 Разовые', 'admin_subs_single')
             ],
             [
+Keyboard.button.callback('📝 Добавить абонемент', 'admin_add_subscription'),
                 Keyboard.button.callback('📊 Статистика', 'admin_subs_stats')
             ],
             [

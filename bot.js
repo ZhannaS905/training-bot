@@ -589,7 +589,6 @@ async function handlePollResponse(ctx, responseType) {
                 }
             }
             
-            await ctx.deleteMessage();
             return;
         }
         

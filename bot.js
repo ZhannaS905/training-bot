@@ -242,16 +242,25 @@ async function handlePollResponse(ctx, responseType) {
             await updatePollInChat(chatId);
         }
         
-        // Отправляем подтверждение
+        // Отправляем подтверждение в ЛС
         const responseMessages = {
-            yes: `✅ **Вы записались на тренировку!**\n\n⏰ ${getTrainingTime(new Date())}\n🔗 ${getTrainingLink()}\n\nПодключайтесь за 5 минут до старта!`,
+            yes: `✅ **Вы записались на тренировку!**\n\n` +
+                 `⏰ Время: **${getTrainingTime(new Date())}**\n` +
+                 `🎥 Платформа: **Яндекс Телемост**\n` +
+                 `🔗 ${getTrainingLink()}\n\n` +
+                 `⏰ Подключайтесь за 5 минут до старта!\n\n` +
+                 `💪 Хорошей тренировки!`,
             no: `❌ **Вы отметили, что не придете.**\n\nУвидимся в следующий раз!`,
             maybe: `❓ **Вы отметились как "Возможно".**\n\nПодтвердите участие позже!`
         };
         
         const userId = getUserId(ctx);
         if (userId && responseMessages[responseType]) {
-            await bot.api.sendMessageToUser(userId, responseMessages[responseType], { format: 'markdown' });
+            try {
+                await bot.api.sendMessageToUser(userId, responseMessages[responseType], { format: 'markdown' });
+            } catch (lsError) {
+                console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
+            }
         }
         
         await ctx.deleteMessage();
@@ -260,90 +269,162 @@ async function handlePollResponse(ctx, responseType) {
     }
 }
 
-// ========== ПОКАЗ РАСПИСАНИЯ ==========
+// ========== ПОКАЗ РАСПИСАНИЯ (В ЛИЧНЫЕ СООБЩЕНИЯ) ==========
 async function showSchedule(ctx) {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    const dayName = getDayName(dayOfWeek);
-    const isTodayTraining = isTrainingDay(today);
-    
-    let text = `**📅 РАСПИСАНИЕ ТРЕНИРОВОК**\n\n`;
-    
-    text += `**🗓️ РЕЖИМ РАБОТЫ:**\n`;
-    text += `└─ Понедельник: **19:15**\n`;
-    text += `└─ Среда: **19:15**\n`;
-    text += `└─ Пятница: **19:15**\n`;
-    text += `└─ Суббота: **18:00**\n`;
-    text += `└─ Воскресенье: **18:00**\n`;
-    text += `└─ Вторник, Четверг: выходной\n\n`;
-    
-    text += `**📅 СЕГОДНЯ (${dayName}):**\n`;
-    if (isTodayTraining) {
-        text += `└─ ✅ Тренировка в **${getTrainingTime(today)}**\n`;
-        text += `└─ 🎥 Яндекс Телемост\n`;
-        text += `└─ ⌛ Длительность: ${getTrainingDuration()}\n\n`;
-    } else {
-        text += `└─ ❌ Тренировок нет\n`;
-        text += `└─ 🎯 Следующая: ${getNextTrainingDay(today)}\n\n`;
+    try {
+        const userId = getUserId(ctx);
+        const userName = getUserName(ctx);
+        
+        if (!userId) {
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '❌ Не удалось определить ваш профиль',
+                    show_alert: true
+                });
+            } catch {}
+            return;
+        }
+        
+        const today = new Date();
+        const dayOfWeek = today.getDay();
+        const dayName = getDayName(dayOfWeek);
+        const isTodayTraining = isTrainingDay(today);
+        
+        let text = `**📅 РАСПИСАНИЕ ТРЕНИРОВОК**\n\n`;
+        
+        text += `**🗓️ РЕЖИМ РАБОТЫ:**\n`;
+        text += `└─ Понедельник: **19:15**\n`;
+        text += `└─ Среда: **19:15**\n`;
+        text += `└─ Пятница: **19:15**\n`;
+        text += `└─ Суббота: **18:00**\n`;
+        text += `└─ Воскресенье: **18:00**\n`;
+        text += `└─ Вторник, Четверг: выходной\n\n`;
+        
+        text += `**📅 СЕГОДНЯ (${dayName}):**\n`;
+        if (isTodayTraining) {
+            text += `└─ ✅ Тренировка в **${getTrainingTime(today)}**\n`;
+            text += `└─ 🎥 Яндекс Телемост\n`;
+            text += `└─ ⌛ Длительность: ${getTrainingDuration()}\n\n`;
+        } else {
+            text += `└─ ❌ Тренировок нет\n`;
+            text += `└─ 🎯 Следующая: ${getNextTrainingDay(today)}\n\n`;
+        }
+        
+        text += `**🎥 ПЛАТФОРМА:**\n`;
+        text += `└─ Яндекс Телемост\n`;
+        text += `└─ 🔗 ${getTrainingLink()}\n`;
+        text += `└─ ⏰ Подключайтесь за 5 минут до старта\n\n`;
+        
+        text += `**💪 ЧТО ВЗЯТЬ С СОБОЙ:**\n`;
+        text += `└─ Удобная спортивная форма\n`;
+        text += `└─ Бутылка воды\n`;
+        text += `└─ Полотенце\n`;
+        text += `└─ Хорошее настроение! 😊`;
+        
+        try {
+            await bot.api.sendMessageToUser(userId, text, { format: 'markdown' });
+            
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '📅 Расписание отправлено в личные сообщения!',
+                    show_alert: false
+                });
+            } catch {}
+            
+        } catch (lsError) {
+            console.error(`⚠️ Не удалось отправить расписание в ЛС: ${lsError.message}`);
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '❌ Не удалось отправить расписание. Напишите боту в личные сообщения.',
+                    show_alert: true
+                });
+            } catch {}
+        }
+        
+        // Удаляем callback сообщение в чате
+        try {
+            await ctx.deleteMessage();
+        } catch {}
+        
+    } catch (error) {
+        console.error(`❌ Ошибка showSchedule: ${error.message}`);
     }
-    
-    text += `**🎥 ПЛАТФОРМА:**\n`;
-    text += `└─ Яндекс Телемост\n`;
-    text += `└─ 🔗 ${getTrainingLink()}\n`;
-    text += `└─ ⏰ Подключайтесь за 5 минут до старта\n\n`;
-    
-    text += `**💪 ЧТО ВЗЯТЬ С СОБОЙ:**\n`;
-    text += `└─ Удобная спортивная форма\n`;
-    text += `└─ Бутылка воды\n`;
-    text += `└─ Полотенце\n`;
-    text += `└─ Хорошее настроение! 😊`;
-    
-    const keyboard = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback('✅ Записаться', 'poll_yes')],
-        [Keyboard.button.callback('« Назад', 'poll_help')]
-    ]);
-    
-    await ctx.reply(text, { format: 'markdown', attachments: [keyboard] });
 }
 
-// ========== ПОМОЩЬ ==========
+// ========== ПОМОЩЬ (В ЛИЧНЫЕ СООБЩЕНИЯ) ==========
 async function showHelp(ctx) {
-    const text = `**❓ ПОМОЩЬ**\n\n` +
-        `**📋 КАК ЗАПИСАТЬСЯ:**\n` +
-        `1. Нажмите кнопку **✅ Приду** в опросе\n` +
-        `2. Получите подтверждение в ЛС\n` +
-        `3. Подключайтесь по ссылке за 5 минут\n\n` +
+    try {
+        const userId = getUserId(ctx);
+        const userName = getUserName(ctx);
         
-        `**🎯 КНОПКИ ОПРОСА:**\n` +
-        `└─ ✅ Приду - запись на тренировку\n` +
-        `└─ ❌ Не приду - отметка отсутствия\n` +
-        `└─ ❓ Возможно - пока не решил\n` +
-        `└─ ↩️ Отменить - удалить голос\n` +
-        `└─ 📅 Расписание - посмотреть расписание\n` +
-        `└─ ❓ Помощь - это сообщение\n\n` +
+        if (!userId) {
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '❌ Не удалось определить ваш профиль',
+                    show_alert: true
+                });
+            } catch {}
+            return;
+        }
         
-        `**📅 РАСПИСАНИЕ:**\n` +
-        `└─ ПН, СР, ПТ: 19:15\n` +
-        `└─ СБ, ВС: 18:00\n` +
-        `└─ ВТ, ЧТ: выходной\n\n` +
+        const text = `**❓ ПОМОЩЬ**\n\n` +
+            `**📋 КАК ЗАПИСАТЬСЯ:**\n` +
+            `1. Нажмите кнопку **✅ Приду** в опросе\n` +
+            `2. Получите подтверждение в ЛС\n` +
+            `3. Подключайтесь по ссылке за 5 минут\n\n` +
+            
+            `**🎯 КНОПКИ ОПРОСА:**\n` +
+            `└─ ✅ Приду - запись на тренировку\n` +
+            `└─ ❌ Не приду - отметка отсутствия\n` +
+            `└─ ❓ Возможно - пока не решил\n` +
+            `└─ ↩️ Отменить - удалить голос\n` +
+            `└─ 📅 Расписание - посмотреть расписание\n` +
+            `└─ ❓ Помощь - это сообщение\n\n` +
+            
+            `**📅 РАСПИСАНИЕ:**\n` +
+            `└─ ПН, СР, ПТ: 19:15\n` +
+            `└─ СБ, ВС: 18:00\n` +
+            `└─ ВТ, ЧТ: выходной\n\n` +
+            
+            `**🎥 ПЛАТФОРМА:**\n` +
+            `└─ Яндекс Телемост\n` +
+            `└─ ${getTrainingLink()}\n\n` +
+            
+            `**📌 КОМАНДЫ БОТА:**\n` +
+            `└─ /опрос - создать опрос (в группе)\n` +
+            `└─ /расписание - показать расписание\n` +
+            `└─ /помощь - это сообщение\n\n` +
+            
+            `**💪 ХОРОШЕЙ ТРЕНИРОВКИ!**`;
         
-        `**🎥 ПЛАТФОРМА:**\n` +
-        `└─ Яндекс Телемост\n` +
-        `└─ ${getTrainingLink()}\n\n` +
+        try {
+            await bot.api.sendMessageToUser(userId, text, { format: 'markdown' });
+            
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '❓ Помощь отправлена в личные сообщения!',
+                    show_alert: false
+                });
+            } catch {}
+            
+        } catch (lsError) {
+            console.error(`⚠️ Не удалось отправить помощь в ЛС: ${lsError.message}`);
+            try {
+                await ctx.answerCallbackQuery({
+                    text: '❌ Не удалось отправить помощь. Напишите боту в личные сообщения.',
+                    show_alert: true
+                });
+            } catch {}
+        }
         
-        `**📌 КОМАНДЫ БОТА:**\n` +
-        `└─ /опрос - создать опрос (в группе)\n` +
-        `└─ /расписание - показать расписание\n` +
-        `└─ /помощь - это сообщение\n\n` +
+        // Удаляем callback сообщение в чате
+        try {
+            await ctx.deleteMessage();
+        } catch {}
         
-        `**💪 ХОРОШЕЙ ТРЕНИРОВКИ!**`;
-    
-    const keyboard = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback('📅 Расписание', 'show_schedule')],
-        [Keyboard.button.callback('✅ Записаться', 'poll_yes')]
-    ]);
-    
-    await ctx.reply(text, { format: 'markdown', attachments: [keyboard] });
+    } catch (error) {
+        console.error(`❌ Ошибка showHelp: ${error.message}`);
+    }
 }
 
 // ========== ОБРАБОТЧИКИ КНОПОК ==========
@@ -380,7 +461,11 @@ bot.action('poll_cancel', async (ctx) => {
             
             const userId = getUserId(ctx);
             if (userId) {
-                await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
+                try {
+                    await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
+                } catch (lsError) {
+                    console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
+                }
             }
         }
     } catch (error) {
@@ -423,12 +508,23 @@ bot.command('опрос', async (ctx) => {
 });
 
 bot.command('расписание', async (ctx) => {
-    await showSchedule(ctx);
+    // Создаем искусственный контекст для showSchedule
+    const fakeCtx = {
+        ...ctx,
+        answerCallbackQuery: async () => {},
+        deleteMessage: async () => {}
+    };
+    await showSchedule(fakeCtx);
     await ctx.deleteMessage();
 });
 
 bot.command('помощь', async (ctx) => {
-    await showHelp(ctx);
+    const fakeCtx = {
+        ...ctx,
+        answerCallbackQuery: async () => {},
+        deleteMessage: async () => {}
+    };
+    await showHelp(fakeCtx);
     await ctx.deleteMessage();
 });
 
@@ -461,7 +557,11 @@ bot.command('отменить', async (ctx) => {
             
             const userId = getUserId(ctx);
             if (userId) {
-                await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
+                try {
+                    await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
+                } catch (lsError) {
+                    console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
+                }
             }
         }
     } catch (error) {
@@ -477,6 +577,7 @@ bot.start().then(() => {
     console.log('✅ Бот успешно запущен!');
     console.log('📅 Расписание: ПН,СР,ПТ 19:15 | СБ,ВС 18:00');
     console.log('🎥 Платформа: Яндекс Телемост');
+    console.log('💬 Кнопки "Расписание" и "Помощь" отправляют ответы в ЛС');
 }).catch(err => {
     console.error(`❌ Ошибка запуска: ${err.message}`);
     process.exit(1);

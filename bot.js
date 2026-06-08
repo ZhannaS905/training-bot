@@ -223,7 +223,13 @@ async function handlePollResponse(ctx, responseType) {
         else if (poll.maybe.includes(userName)) alreadyInList = 'maybe';
         
         if (alreadyInList === responseType) {
-            await ctx.deleteMessage();
+            // Убираем только всплывающее уведомление, не удаляем опрос
+            try {
+                await ctx.answerCallbackQuery({
+                    text: 'ℹ️ Вы уже в этом списке',
+                    show_alert: false
+                });
+            } catch {}
             return;
         }
         
@@ -265,9 +271,28 @@ async function handlePollResponse(ctx, responseType) {
             }
         }
         
-        await ctx.deleteMessage();
+        // Показываем всплывающее уведомление
+        const alertMessages = {
+            yes: '✅ Вы записались на тренировку! Подтверждение отправлено в ЛС',
+            no: '❌ Вы отметили, что не придете',
+            maybe: '❓ Вы отметились как "Возможно"'
+        };
+        
+        try {
+            await ctx.answerCallbackQuery({
+                text: alertMessages[responseType],
+                show_alert: false
+            });
+        } catch {}
+        
     } catch (error) {
         console.error(`❌ Ошибка обработки ответа: ${error.message}`);
+        try {
+            await ctx.answerCallbackQuery({
+                text: '❌ Ошибка при обработке',
+                show_alert: false
+            });
+        } catch {}
     }
 }
 
@@ -343,12 +368,16 @@ async function showSchedule(ctx) {
             } catch {}
         }
         
-        try {
-            await ctx.deleteMessage();
-        } catch {}
+        // ВАЖНО: НЕ УДАЛЯЕМ ОПРОС! Только показываем уведомление
         
     } catch (error) {
         console.error(`❌ Ошибка showSchedule: ${error.message}`);
+        try {
+            await ctx.answerCallbackQuery({
+                text: '❌ Ошибка при получении расписания',
+                show_alert: false
+            });
+        } catch {}
     }
 }
 
@@ -419,12 +448,16 @@ async function showHelp(ctx) {
             } catch {}
         }
         
-        try {
-            await ctx.deleteMessage();
-        } catch {}
+        // ВАЖНО: НЕ УДАЛЯЕМ ОПРОС! Только показываем уведомление
         
     } catch (error) {
         console.error(`❌ Ошибка showHelp: ${error.message}`);
+        try {
+            await ctx.answerCallbackQuery({
+                text: '❌ Ошибка при получении помощи',
+                show_alert: false
+            });
+        } catch {}
     }
 }
 
@@ -442,22 +475,40 @@ bot.action('poll_cancel', async (ctx) => {
         const today = new Date().toISOString().split('T')[0];
         const userName = getUserName(ctx);
         
-        await ctx.deleteMessage();
-        
-        if (!dailyPolls[today]) return;
+        if (!dailyPolls[today]) {
+            try {
+                await ctx.answerCallbackQuery({
+                    text: 'ℹ️ Вы еще не голосовали',
+                    show_alert: false
+                });
+            } catch {}
+            return;
+        }
         
         const poll = dailyPolls[today];
         let removed = false;
+        let removedFrom = null;
         
         ['yes', 'no', 'maybe'].forEach(type => {
             const index = poll[type]?.indexOf(userName);
             if (index > -1) {
                 poll[type].splice(index, 1);
                 removed = true;
+                removedFrom = type;
             }
         });
         
-        if (removed && chatId) {
+        if (!removed) {
+            try {
+                await ctx.answerCallbackQuery({
+                    text: 'ℹ️ Вы еще не голосовали',
+                    show_alert: false
+                });
+            } catch {}
+            return;
+        }
+        
+        if (chatId) {
             await updatePollInChat(chatId);
             
             const userId = getUserId(ctx);
@@ -469,8 +520,22 @@ bot.action('poll_cancel', async (ctx) => {
                 }
             }
         }
+        
+        try {
+            await ctx.answerCallbackQuery({
+                text: '✅ Ваш голос отменен',
+                show_alert: false
+            });
+        } catch {}
+        
     } catch (error) {
         console.error(`❌ Ошибка отмены: ${error.message}`);
+        try {
+            await ctx.answerCallbackQuery({
+                text: '❌ Ошибка при отмене',
+                show_alert: false
+            });
+        } catch {}
     }
 });
 
@@ -577,7 +642,7 @@ bot.start().then(() => {
     console.log('✅ Бот успешно запущен!');
     console.log('📅 Расписание: ПН,СР,ПТ 19:15 | СБ,ВС 18:00');
     console.log('🎥 Платформа: Яндекс Телемост');
-    console.log('💬 Кнопки "Расписание" и "Помощь" отправляют ответы в ЛС');
+    console.log('💬 Кнопки "Расписание" и "Помощь" отправляют ответы в ЛС, опрос остается в чате');
 }).catch(err => {
     console.error(`❌ Ошибка запуска: ${err.message}`);
     process.exit(1);

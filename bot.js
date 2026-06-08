@@ -111,13 +111,13 @@ function createPollText(dateKey, poll) {
     const trainingLink = getTrainingLink();
     
     let text = `🏋️‍♀️ **${formattedDate}**\n`;
-    text += `💪 **ВИИТ тренировка**\n\n`;
+    text += `💪 **ТАБАТА тренировка**\n\n`;
     text += `⏰ Время: **${trainingTime}**\n`;
     text += `🎥 Платформа: **Яндекс Телемост**\n`;
     text += `⌛ Длительность: **${getTrainingDuration()}**\n\n`;
     
     if (total === 0) {
-        text += `🤨 *Пока никто не записался!*\n\n`;
+        text += `🤨 _Пока никто не записался!_\n\n`;
     } else {
         text += `👥 **Участников: ${total}**\n\n`;
         
@@ -146,10 +146,9 @@ function createPollText(dateKey, poll) {
         }
     }
     
-    text += `🔗 **Ссылка для подключения:**\n`;
-    text += `${trainingLink}\n\n`;
-    text += `⏰ Подключайтесь за 5 минут до старта!\n\n`;
-    text += `*Используйте кнопки ниже:*`;
+    text += `🔗 [Ссылка для подключения](${trainingLink})\n\n`;
+    text += `⏰ _Подключайтесь за 5 минут до старта!_\n\n`;
+    text += `Используйте кнопки ниже:`;
     
     return text;
 }
@@ -243,15 +242,18 @@ async function handlePollResponse(ctx, responseType) {
         }
         
         // Отправляем подтверждение в ЛС
+        const trainingLink = getTrainingLink();
+        const trainingTime = getTrainingTime(new Date());
+        
         const responseMessages = {
             yes: `✅ **Вы записались на тренировку!**\n\n` +
-                 `⏰ Время: **${getTrainingTime(new Date())}**\n` +
+                 `⏰ Время: **${trainingTime}**\n` +
                  `🎥 Платформа: **Яндекс Телемост**\n` +
-                 `🔗 ${getTrainingLink()}\n\n` +
-                 `⏰ Подключайтесь за 5 минут до старта!\n\n` +
+                 `🔗 [Ссылка для подключения](${trainingLink})\n\n` +
+                 `⏰ _Подключайтесь за 5 минут до старта!_\n\n` +
                  `💪 Хорошей тренировки!`,
             no: `❌ **Вы отметили, что не придете.**\n\nУвидимся в следующий раз!`,
-            maybe: `❓ **Вы отметились как "Возможно".**\n\nПодтвердите участие позже!`
+            maybe: `❓ **Вы отметились как "Возможно".**\n\n_Подтвердите участие позже!_`
         };
         
         const userId = getUserId(ctx);
@@ -273,7 +275,6 @@ async function handlePollResponse(ctx, responseType) {
 async function showSchedule(ctx) {
     try {
         const userId = getUserId(ctx);
-        const userName = getUserName(ctx);
         
         if (!userId) {
             try {
@@ -289,6 +290,7 @@ async function showSchedule(ctx) {
         const dayOfWeek = today.getDay();
         const dayName = getDayName(dayOfWeek);
         const isTodayTraining = isTrainingDay(today);
+        const trainingLink = getTrainingLink();
         
         let text = `**📅 РАСПИСАНИЕ ТРЕНИРОВОК**\n\n`;
         
@@ -312,8 +314,8 @@ async function showSchedule(ctx) {
         
         text += `**🎥 ПЛАТФОРМА:**\n`;
         text += `└─ Яндекс Телемост\n`;
-        text += `└─ 🔗 ${getTrainingLink()}\n`;
-        text += `└─ ⏰ Подключайтесь за 5 минут до старта\n\n`;
+        text += `└─ 🔗 [Ссылка для подключения](${trainingLink})\n`;
+        text += `└─ ⏰ _Подключайтесь за 5 минут до старта_\n\n`;
         
         text += `**💪 ЧТО ВЗЯТЬ С СОБОЙ:**\n`;
         text += `└─ Удобная спортивная форма\n`;
@@ -341,7 +343,6 @@ async function showSchedule(ctx) {
             } catch {}
         }
         
-        // Удаляем callback сообщение в чате
         try {
             await ctx.deleteMessage();
         } catch {}
@@ -355,7 +356,6 @@ async function showSchedule(ctx) {
 async function showHelp(ctx) {
     try {
         const userId = getUserId(ctx);
-        const userName = getUserName(ctx);
         
         if (!userId) {
             try {
@@ -366,6 +366,8 @@ async function showHelp(ctx) {
             } catch {}
             return;
         }
+        
+        const trainingLink = getTrainingLink();
         
         const text = `**❓ ПОМОЩЬ**\n\n` +
             `**📋 КАК ЗАПИСАТЬСЯ:**\n` +
@@ -388,7 +390,7 @@ async function showHelp(ctx) {
             
             `**🎥 ПЛАТФОРМА:**\n` +
             `└─ Яндекс Телемост\n` +
-            `└─ ${getTrainingLink()}\n\n` +
+            `└─ 🔗 [Ссылка для подключения](${trainingLink})\n\n` +
             
             `**📌 КОМАНДЫ БОТА:**\n` +
             `└─ /опрос - создать опрос (в группе)\n` +
@@ -417,7 +419,6 @@ async function showHelp(ctx) {
             } catch {}
         }
         
-        // Удаляем callback сообщение в чате
         try {
             await ctx.deleteMessage();
         } catch {}
@@ -484,7 +485,7 @@ bot.command('опрос', async (ctx) => {
         const chatId = getChatId(ctx);
         
         if (!chatId) {
-            await ctx.reply('⚠️ *Создавайте опрос в групповом чате!*\n\nДобавьте меня в группу и напишите /опрос', { format: 'markdown' });
+            await ctx.reply('⚠️ _Создавайте опрос в групповом чате!_\n\nДобавьте меня в группу и напишите /опрос', { format: 'markdown' });
             await ctx.deleteMessage();
             return;
         }
@@ -508,7 +509,6 @@ bot.command('опрос', async (ctx) => {
 });
 
 bot.command('расписание', async (ctx) => {
-    // Создаем искусственный контекст для showSchedule
     const fakeCtx = {
         ...ctx,
         answerCallbackQuery: async () => {},

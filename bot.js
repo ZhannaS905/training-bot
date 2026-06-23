@@ -1,4 +1,4 @@
-// bot.js - УПРОЩЕННАЯ ВЕРСИЯ: ТОЛЬКО ОПРОСЫ, ЗАПИСЬ И РАСПИСАНИЕ
+// bot.js - ИСПРАВЛЕНА ВЕРСИЯ: СТАРОЕ СООБЩЕНИЕ УДАЛЯЕТСЯ
 require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 
@@ -11,17 +11,14 @@ const pollMessages = {};
 // ========== РАСПИСАНИЕ ==========
 function isTrainingDay(date) {
     const dayOfWeek = date.getDay();
-    // ПН=1, СР=3, ПТ=5, СБ=6, ВС=0
     return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0;
 }
 
 function getTrainingTime(date) {
     const dayOfWeek = date.getDay();
-    // ПН, СР, ПТ - 19:15
     if (dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5) {
         return '19:15';
     }
-    // СБ, ВС - 18:00
     return '18:00';
 }
 
@@ -40,13 +37,10 @@ function getTrainingDuration() {
 function getNextTrainingDay(currentDate) {
     const days = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
     let nextDate = new Date(currentDate);
-    
     nextDate.setDate(nextDate.getDate() + 1);
-    
     while (!isTrainingDay(nextDate)) {
         nextDate.setDate(nextDate.getDate() + 1);
     }
-    
     const dayName = days[nextDate.getDay()];
     const time = getTrainingTime(nextDate);
     return `${dayName}, ${nextDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}, начало в ${time}`;
@@ -153,6 +147,22 @@ function createPollText(dateKey, poll) {
     return text;
 }
 
+// ========== УДАЛЕНИЕ СТАРОГО СООБЩЕНИЯ ==========
+async function deleteOldPollMessage(chatId, messageId) {
+    if (!messageId) return false;
+    try {
+        await bot.api.deleteMessage({
+            message_id: messageId,
+            chat_id: chatId
+        });
+        console.log(`🗑️ Удалено старое сообщение опроса: ${messageId}`);
+        return true;
+    } catch (error) {
+        console.log(`⚠️ Не удалось удалить старое сообщение: ${error.message}`);
+        return false;
+    }
+}
+
 // ========== СОЗДАНИЕ/ОБНОВЛЕНИЕ ОПРОСА ==========
 async function createNewPollMessage(chatId, pollText, pollKey) {
     try {
@@ -164,7 +174,9 @@ async function createNewPollMessage(chatId, pollText, pollKey) {
         
         let messageId = message?.body?.mid || message?.mid;
         if (messageId) {
+            // Сохраняем новый ID
             pollMessages[pollKey] = messageId;
+            console.log(`✅ Создан новый опрос, mid: ${messageId}`);
         }
         
         return messageId;
@@ -178,29 +190,26 @@ async function updatePollInChat(chatId) {
     try {
         const today = new Date().toISOString().split('T')[0];
         const pollKey = `${chatId}_${today}`;
-        const messageId = pollMessages[pollKey];
+        const oldMessageId = pollMessages[pollKey];
 
         if (!chatId) return;
         
         const poll = dailyPolls[today] || { yes: [], no: [], maybe: [] };
         const pollText = createPollText(today, poll);
-        const keyboard = createPollKeyboard();
-
-        if (messageId) {
-            try {
-                await bot.api.sendMessageToChat(chatId, pollText, {
-                    format: 'markdown',
-                    attachments: [keyboard],
-                    forward_message_id: messageId
-                });
-            } catch (editError) {
-                await createNewPollMessage(chatId, pollText, pollKey);
-            }
-        } else {
-            await createNewPollMessage(chatId, pollText, pollKey);
+        
+        // Удаляем старое сообщение, если оно есть
+        if (oldMessageId) {
+            await deleteOldPollMessage(chatId, oldMessageId);
         }
+        
+        // Создаем новое сообщение
+        const newMessageId = await createNewPollMessage(chatId, pollText, pollKey);
+        
+        return newMessageId;
+        
     } catch (error) {
         console.error(`❌ Ошибка обновления опроса: ${error.message}`);
+        return null;
     }
 }
 
@@ -223,7 +232,6 @@ async function handlePollResponse(ctx, responseType) {
         else if (poll.maybe.includes(userName)) alreadyInList = 'maybe';
         
         if (alreadyInList === responseType) {
-            // Убираем только всплывающее уведомление, не удаляем опрос
             try {
                 await ctx.answerCallbackQuery({
                     text: 'ℹ️ Вы уже в этом списке',
@@ -242,7 +250,7 @@ async function handlePollResponse(ctx, responseType) {
         // Добавляем в новый список
         poll[responseType].push(userName);
         
-        // Обновляем опрос
+        // Обновляем опрос (старое сообщение удалится, новое создастся)
         if (chatId) {
             await updatePollInChat(chatId);
         }
@@ -271,9 +279,8 @@ async function handlePollResponse(ctx, responseType) {
             }
         }
         
-        // Показываем всплывающее уведомление
         const alertMessages = {
-            yes: '✅ Вы записались на тренировку! Подтверждение отправлено в ЛС',
+            yes: '✅ Вы записались на тренировку!',
             no: '❌ Вы отметили, что не придете',
             maybe: '❓ Вы отметились как "Возможно"'
         };
@@ -350,34 +357,19 @@ async function showSchedule(ctx) {
         
         try {
             await bot.api.sendMessageToUser(userId, text, { format: 'markdown' });
-            
-            try {
-                await ctx.answerCallbackQuery({
-                    text: '📅 Расписание отправлено в личные сообщения!',
-                    show_alert: false
-                });
-            } catch {}
-            
+            await ctx.answerCallbackQuery({
+                text: '📅 Расписание отправлено в личные сообщения!',
+                show_alert: false
+            });
         } catch (lsError) {
-            console.error(`⚠️ Не удалось отправить расписание в ЛС: ${lsError.message}`);
-            try {
-                await ctx.answerCallbackQuery({
-                    text: '❌ Не удалось отправить расписание. Напишите боту в личные сообщения.',
-                    show_alert: true
-                });
-            } catch {}
+            await ctx.answerCallbackQuery({
+                text: '❌ Не удалось отправить. Напишите боту в ЛС.',
+                show_alert: true
+            });
         }
-        
-        // ВАЖНО: НЕ УДАЛЯЕМ ОПРОС! Только показываем уведомление
         
     } catch (error) {
         console.error(`❌ Ошибка showSchedule: ${error.message}`);
-        try {
-            await ctx.answerCallbackQuery({
-                text: '❌ Ошибка при получении расписания',
-                show_alert: false
-            });
-        } catch {}
     }
 }
 
@@ -430,34 +422,19 @@ async function showHelp(ctx) {
         
         try {
             await bot.api.sendMessageToUser(userId, text, { format: 'markdown' });
-            
-            try {
-                await ctx.answerCallbackQuery({
-                    text: '❓ Помощь отправлена в личные сообщения!',
-                    show_alert: false
-                });
-            } catch {}
-            
+            await ctx.answerCallbackQuery({
+                text: '❓ Помощь отправлена в личные сообщения!',
+                show_alert: false
+            });
         } catch (lsError) {
-            console.error(`⚠️ Не удалось отправить помощь в ЛС: ${lsError.message}`);
-            try {
-                await ctx.answerCallbackQuery({
-                    text: '❌ Не удалось отправить помощь. Напишите боту в личные сообщения.',
-                    show_alert: true
-                });
-            } catch {}
+            await ctx.answerCallbackQuery({
+                text: '❌ Не удалось отправить. Напишите боту в ЛС.',
+                show_alert: true
+            });
         }
-        
-        // ВАЖНО: НЕ УДАЛЯЕМ ОПРОС! Только показываем уведомление
         
     } catch (error) {
         console.error(`❌ Ошибка showHelp: ${error.message}`);
-        try {
-            await ctx.answerCallbackQuery({
-                text: '❌ Ошибка при получении помощи',
-                show_alert: false
-            });
-        } catch {}
     }
 }
 
@@ -476,35 +453,29 @@ bot.action('poll_cancel', async (ctx) => {
         const userName = getUserName(ctx);
         
         if (!dailyPolls[today]) {
-            try {
-                await ctx.answerCallbackQuery({
-                    text: 'ℹ️ Вы еще не голосовали',
-                    show_alert: false
-                });
-            } catch {}
+            await ctx.answerCallbackQuery({
+                text: 'ℹ️ Вы еще не голосовали',
+                show_alert: false
+            });
             return;
         }
         
         const poll = dailyPolls[today];
         let removed = false;
-        let removedFrom = null;
         
         ['yes', 'no', 'maybe'].forEach(type => {
             const index = poll[type]?.indexOf(userName);
             if (index > -1) {
                 poll[type].splice(index, 1);
                 removed = true;
-                removedFrom = type;
             }
         });
         
         if (!removed) {
-            try {
-                await ctx.answerCallbackQuery({
-                    text: 'ℹ️ Вы еще не голосовали',
-                    show_alert: false
-                });
-            } catch {}
+            await ctx.answerCallbackQuery({
+                text: 'ℹ️ Вы еще не голосовали',
+                show_alert: false
+            });
             return;
         }
         
@@ -515,27 +486,17 @@ bot.action('poll_cancel', async (ctx) => {
             if (userId) {
                 try {
                     await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
-                } catch (lsError) {
-                    console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
-                }
+                } catch (lsError) {}
             }
         }
         
-        try {
-            await ctx.answerCallbackQuery({
-                text: '✅ Ваш голос отменен',
-                show_alert: false
-            });
-        } catch {}
+        await ctx.answerCallbackQuery({
+            text: '✅ Ваш голос отменен',
+            show_alert: false
+        });
         
     } catch (error) {
         console.error(`❌ Ошибка отмены: ${error.message}`);
-        try {
-            await ctx.answerCallbackQuery({
-                text: '❌ Ошибка при отмене',
-                show_alert: false
-            });
-        } catch {}
     }
 });
 
@@ -576,8 +537,7 @@ bot.command('опрос', async (ctx) => {
 bot.command('расписание', async (ctx) => {
     const fakeCtx = {
         ...ctx,
-        answerCallbackQuery: async () => {},
-        deleteMessage: async () => {}
+        answerCallbackQuery: async () => {}
     };
     await showSchedule(fakeCtx);
     await ctx.deleteMessage();
@@ -586,8 +546,7 @@ bot.command('расписание', async (ctx) => {
 bot.command('помощь', async (ctx) => {
     const fakeCtx = {
         ...ctx,
-        answerCallbackQuery: async () => {},
-        deleteMessage: async () => {}
+        answerCallbackQuery: async () => {}
     };
     await showHelp(fakeCtx);
     await ctx.deleteMessage();
@@ -624,9 +583,7 @@ bot.command('отменить', async (ctx) => {
             if (userId) {
                 try {
                     await bot.api.sendMessageToUser(userId, '✅ **Ваш голос отменен!**', { format: 'markdown' });
-                } catch (lsError) {
-                    console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
-                }
+                } catch (lsError) {}
             }
         }
     } catch (error) {
@@ -642,7 +599,6 @@ bot.start().then(() => {
     console.log('✅ Бот успешно запущен!');
     console.log('📅 Расписание: ПН,СР,ПТ 19:15 | СБ,ВС 18:00');
     console.log('🎥 Платформа: Яндекс Телемост');
-    console.log('💬 Кнопки "Расписание" и "Помощь" отправляют ответы в ЛС, опрос остается в чате');
 }).catch(err => {
     console.error(`❌ Ошибка запуска: ${err.message}`);
     process.exit(1);

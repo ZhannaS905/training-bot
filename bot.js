@@ -1,4 +1,4 @@
-// bot.js - ИСПРАВЛЕНА ВЕРСИЯ: ПРАВИЛЬНОЕ УДАЛЕНИЕ СТАРОГО ОПРОСА
+// bot.js - УПРОЩЕННАЯ ВЕРСИЯ: ТОЛЬКО ОПРОСЫ, ЗАПИСЬ И РАСПИСАНИЕ
 require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 
@@ -147,28 +147,7 @@ function createPollText(dateKey, poll) {
     return text;
 }
 
-// ========== УДАЛЕНИЕ СТАРОГО СООБЩЕНИЯ ==========
-async function deleteOldPollMessage(chatId, messageId) {
-    if (!messageId) {
-        logToFile('⚠️ Нет messageId для удаления');
-        return false;
-    }
-    
-    try {
-        // Пробуем удалить сообщение
-        const result = await bot.api.deleteMessage({
-            message_id: Number(messageId), // Приводим к числу!
-            chat_id: Number(chatId)        // Приводим к числу!
-        });
-        logToFile(`🗑️ Удалено старое сообщение: ${messageId}`);
-        return true;
-    } catch (error) {
-        logToFile(`⚠️ Не удалось удалить старое сообщение ${messageId}: ${error.message}`);
-        return false;
-    }
-}
-
-// ========== СОЗДАНИЕ НОВОГО ОПРОСА ==========
+// ========== СОЗДАНИЕ/ОБНОВЛЕНИЕ ОПРОСА ==========
 async function createNewPollMessage(chatId, pollText, pollKey) {
     try {
         logToFile(`🆕 Создаю новое сообщение с опросом в чате ${chatId}`);
@@ -203,12 +182,11 @@ async function createNewPollMessage(chatId, pollText, pollKey) {
     }
 }
 
-// ========== ОБНОВЛЕНИЕ ОПРОСА ==========
 async function updatePollInChat(chatId) {
     try {
         const today = new Date().toISOString().split('T')[0];
         const pollKey = `${chatId}_${today}`;
-        const oldMessageId = pollMessages[pollKey];
+        const messageId = pollMessages[pollKey];
 
         if (!chatId) {
             logToFile('⚠️ Нет chatId');
@@ -217,26 +195,46 @@ async function updatePollInChat(chatId) {
         
         const poll = dailyPolls[today] || { yes: [], no: [], maybe: [] };
         const pollText = createPollText(today, poll);
+        const keyboard = createPollKeyboard();
 
-        // 1. Удаляем старое сообщение, если оно есть
-        if (oldMessageId) {
-            logToFile(`🗑️ Пытаюсь удалить старое сообщение: ${oldMessageId}`);
-            await deleteOldPollMessage(chatId, oldMessageId);
-            // Удаляем ID из кеша, чтобы не пытаться удалить его снова
-            delete pollMessages[pollKey];
-        }
-        
-        // 2. Создаём новое сообщение
-        logToFile(`🆕 Создаю новое сообщение опроса`);
-        const newMessageId = await createNewPollMessage(chatId, pollText, pollKey);
-        
-        if (newMessageId) {
-            logToFile(`✅ Опрос обновлён, новый mid: ${newMessageId}`);
+        logToFile(`🔄 Обновляю опрос в чате ${chatId}, message_id: ${messageId}`);
+
+        // Пытаемся обновить существующее сообщение
+        if (messageId) {
+            try {
+                const result = await bot.api.sendMessageToChat(chatId, pollText, {
+                    format: 'markdown',
+                    attachments: [keyboard],
+                    forward_message_id: messageId
+                });
+                
+                if (result?.body?.mid) {
+                    const newMessageId = result.body.mid;
+                    
+                    // Если это новое сообщение (mid изменился), обновляем ID
+                    if (newMessageId !== messageId) {
+                        pollMessages[pollKey] = newMessageId;
+                        logToFile(`✅ Создано новое сообщение, mid: ${newMessageId}`);
+                    } else {
+                        logToFile(`✅ Сообщение обновлено`);
+                    }
+                    
+                    return newMessageId;
+                }
+                
+            } catch (editError) {
+                logToFile(`⚠️ Не удалось обновить сообщение: ${editError.message}`);
+                
+                // Если обновление не удалось, создаем новое
+                return await createNewPollMessage(chatId, pollText, pollKey);
+            }
         } else {
-            logToFile(`❌ Не удалось создать новый опрос`);
+            // Если нет messageId, просто создаем новое сообщение
+            logToFile(`⚠️ Нет message_id для чата ${chatId}, создаю новое`);
+            return await createNewPollMessage(chatId, pollText, pollKey);
         }
         
-        return newMessageId;
+        return null;
 
     } catch (error) {
         logToFile(`❌ Ошибка в updatePollInChat: ${error.message}`);
@@ -281,7 +279,7 @@ async function handlePollResponse(ctx, responseType) {
         // Добавляем в новый список
         poll[responseType].push(userName);
         
-        // Обновляем опрос (старое сообщение удалится, новое создастся)
+        // Обновляем опрос
         if (chatId) {
             await updatePollInChat(chatId);
         }

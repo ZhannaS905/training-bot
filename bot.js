@@ -1,4 +1,4 @@
-// bot.js - ИСПРАВЛЕНА ВЕРСИЯ: СТАРОЕ СООБЩЕНИЕ УДАЛЯЕТСЯ
+// bot.js - ИСПРАВЛЕНА ВЕРСИЯ: ПРАВИЛЬНОЕ УДАЛЕНИЕ СТАРОГО ОПРОСА
 require('dotenv').config();
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 
@@ -20,10 +20,6 @@ function getTrainingTime(date) {
         return '19:15';
     }
     return '18:00';
-}
-
-function getTrainingLocation() {
-    return 'Яндекс Телемост';
 }
 
 function getTrainingLink() {
@@ -69,6 +65,10 @@ function getDayName(dayNumber) {
     return days[dayNumber] || 'Неизвестно';
 }
 
+function logToFile(message) {
+    console.log(`[${new Date().toISOString()}] ${message}`);
+}
+
 // ========== СОЗДАНИЕ КЛАВИАТУРЫ ОПРОСА ==========
 function createPollKeyboard() {
     return Keyboard.inlineKeyboard([
@@ -111,7 +111,7 @@ function createPollText(dateKey, poll) {
     text += `⌛ Длительность: **${getTrainingDuration()}**\n\n`;
     
     if (total === 0) {
-        text += `🤨 _Пока никто не записался!_\n\n`;
+        text += `🤨 *Пока никто не записался!*\n\n`;
     } else {
         text += `👥 **Участников: ${total}**\n\n`;
         
@@ -149,66 +149,97 @@ function createPollText(dateKey, poll) {
 
 // ========== УДАЛЕНИЕ СТАРОГО СООБЩЕНИЯ ==========
 async function deleteOldPollMessage(chatId, messageId) {
-    if (!messageId) return false;
+    if (!messageId) {
+        logToFile('⚠️ Нет messageId для удаления');
+        return false;
+    }
+    
     try {
-        await bot.api.deleteMessage({
-            message_id: messageId,
-            chat_id: chatId
+        // Пробуем удалить сообщение
+        const result = await bot.api.deleteMessage({
+            message_id: Number(messageId), // Приводим к числу!
+            chat_id: Number(chatId)        // Приводим к числу!
         });
-        console.log(`🗑️ Удалено старое сообщение опроса: ${messageId}`);
+        logToFile(`🗑️ Удалено старое сообщение: ${messageId}`);
         return true;
     } catch (error) {
-        console.log(`⚠️ Не удалось удалить старое сообщение: ${error.message}`);
+        logToFile(`⚠️ Не удалось удалить старое сообщение ${messageId}: ${error.message}`);
         return false;
     }
 }
 
-// ========== СОЗДАНИЕ/ОБНОВЛЕНИЕ ОПРОСА ==========
+// ========== СОЗДАНИЕ НОВОГО ОПРОСА ==========
 async function createNewPollMessage(chatId, pollText, pollKey) {
     try {
+        logToFile(`🆕 Создаю новое сообщение с опросом в чате ${chatId}`);
+        
         const keyboard = createPollKeyboard();
+        
         const message = await bot.api.sendMessageToChat(chatId, pollText, {
             format: 'markdown',
             attachments: [keyboard]
         });
         
-        let messageId = message?.body?.mid || message?.mid;
-        if (messageId) {
-            // Сохраняем новый ID
+        let messageId = null;
+        
+        if (message?.body?.mid) {
+            messageId = message.body.mid;
             pollMessages[pollKey] = messageId;
-            console.log(`✅ Создан новый опрос, mid: ${messageId}`);
+            logToFile(`✅ Создан новый опрос, mid: ${messageId}`);
+        } else if (message?.mid) {
+            messageId = message.mid;
+            pollMessages[pollKey] = messageId;
+            logToFile(`✅ Создан новый опрос, mid: ${messageId}`);
+        } else {
+            logToFile(`⚠️ Не получили mid`);
+            return null;
         }
         
         return messageId;
+        
     } catch (sendError) {
-        console.error(`❌ Не удалось создать сообщение: ${sendError.message}`);
+        logToFile(`❌ Не удалось создать сообщение: ${sendError.message}`);
         return null;
     }
 }
 
+// ========== ОБНОВЛЕНИЕ ОПРОСА ==========
 async function updatePollInChat(chatId) {
     try {
         const today = new Date().toISOString().split('T')[0];
         const pollKey = `${chatId}_${today}`;
         const oldMessageId = pollMessages[pollKey];
 
-        if (!chatId) return;
+        if (!chatId) {
+            logToFile('⚠️ Нет chatId');
+            return;
+        }
         
         const poll = dailyPolls[today] || { yes: [], no: [], maybe: [] };
         const pollText = createPollText(today, poll);
-        
-        // Удаляем старое сообщение, если оно есть
+
+        // 1. Удаляем старое сообщение, если оно есть
         if (oldMessageId) {
+            logToFile(`🗑️ Пытаюсь удалить старое сообщение: ${oldMessageId}`);
             await deleteOldPollMessage(chatId, oldMessageId);
+            // Удаляем ID из кеша, чтобы не пытаться удалить его снова
+            delete pollMessages[pollKey];
         }
         
-        // Создаем новое сообщение
+        // 2. Создаём новое сообщение
+        logToFile(`🆕 Создаю новое сообщение опроса`);
         const newMessageId = await createNewPollMessage(chatId, pollText, pollKey);
         
-        return newMessageId;
+        if (newMessageId) {
+            logToFile(`✅ Опрос обновлён, новый mid: ${newMessageId}`);
+        } else {
+            logToFile(`❌ Не удалось создать новый опрос`);
+        }
         
+        return newMessageId;
+
     } catch (error) {
-        console.error(`❌ Ошибка обновления опроса: ${error.message}`);
+        logToFile(`❌ Ошибка в updatePollInChat: ${error.message}`);
         return null;
     }
 }
@@ -275,7 +306,7 @@ async function handlePollResponse(ctx, responseType) {
             try {
                 await bot.api.sendMessageToUser(userId, responseMessages[responseType], { format: 'markdown' });
             } catch (lsError) {
-                console.error(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
+                logToFile(`⚠️ Не удалось отправить в ЛС: ${lsError.message}`);
             }
         }
         
@@ -293,7 +324,7 @@ async function handlePollResponse(ctx, responseType) {
         } catch {}
         
     } catch (error) {
-        console.error(`❌ Ошибка обработки ответа: ${error.message}`);
+        logToFile(`❌ Ошибка обработки ответа: ${error.message}`);
         try {
             await ctx.answerCallbackQuery({
                 text: '❌ Ошибка при обработке',
@@ -369,7 +400,7 @@ async function showSchedule(ctx) {
         }
         
     } catch (error) {
-        console.error(`❌ Ошибка showSchedule: ${error.message}`);
+        logToFile(`❌ Ошибка showSchedule: ${error.message}`);
     }
 }
 
@@ -434,7 +465,7 @@ async function showHelp(ctx) {
         }
         
     } catch (error) {
-        console.error(`❌ Ошибка showHelp: ${error.message}`);
+        logToFile(`❌ Ошибка showHelp: ${error.message}`);
     }
 }
 
@@ -496,7 +527,7 @@ bot.action('poll_cancel', async (ctx) => {
         });
         
     } catch (error) {
-        console.error(`❌ Ошибка отмены: ${error.message}`);
+        logToFile(`❌ Ошибка отмены: ${error.message}`);
     }
 });
 
@@ -529,7 +560,7 @@ bot.command('опрос', async (ctx) => {
         await createNewPollMessage(chatId, pollText, pollKey);
         await ctx.deleteMessage();
     } catch (error) {
-        console.error(`❌ Ошибка: ${error.message}`);
+        logToFile(`❌ Ошибка: ${error.message}`);
         await ctx.reply('❌ Ошибка при создании опроса', { format: 'markdown' });
     }
 });
@@ -587,19 +618,19 @@ bot.command('отменить', async (ctx) => {
             }
         }
     } catch (error) {
-        console.error(`❌ Ошибка: ${error.message}`);
+        logToFile(`❌ Ошибка: ${error.message}`);
         await ctx.deleteMessage();
     }
 });
 
 // ========== ЗАПУСК БОТА ==========
-console.log('🤖 Бот запускается...');
+logToFile('🤖 Бот запускается...');
 
 bot.start().then(() => {
-    console.log('✅ Бот успешно запущен!');
-    console.log('📅 Расписание: ПН,СР,ПТ 19:15 | СБ,ВС 18:00');
-    console.log('🎥 Платформа: Яндекс Телемост');
+    logToFile('✅ Бот успешно запущен!');
+    logToFile('📅 Расписание: ПН,СР,ПТ 19:15 | СБ,ВС 18:00');
+    logToFile('🎥 Платформа: Яндекс Телемост');
 }).catch(err => {
-    console.error(`❌ Ошибка запуска: ${err.message}`);
+    logToFile(`❌ Ошибка запуска: ${err.message}`);
     process.exit(1);
 });

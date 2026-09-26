@@ -12,21 +12,21 @@ const pollMessages = {};
 // ========== РАСПИСАНИЕ ==========
 function isTrainingDay(date) {
     const dayOfWeek = date.getDay();
-    // ПН=1, СР=3, ПТ=5, СБ=6, ВС=0
-    return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0;
+    // ПН=1, ВТ=2, СР=3, ЧТ=4, СБ=6, ВС=0 (Пятница теперь выходной)
+    return dayOfWeek === 1 || dayOfWeek === 2 || dayOfWeek === 3 || dayOfWeek === 4 || dayOfWeek === 6 || dayOfWeek === 0;
 }
 
 function getTrainingTime(date) {
     const dayOfWeek = date.getDay();
-    // ПН, СР, ПТ - 19:15
-    if (dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5) {
-        return '19:15';
-    }
-    // СБ, ВС - 18:00
-    return '18:00';
+    if (dayOfWeek === 1 || dayOfWeek === 3) return '20:00'; // ПН, СР
+    if (dayOfWeek === 2 || dayOfWeek === 4) return '18:30'; // ВТ, ЧТ
+    return '18:00'; // СБ, ВС
 }
 
-function getTrainingLocation() {
+function getTrainingLocation(date) {
+    const dayOfWeek = date.getDay();
+    if (dayOfWeek === 1 || dayOfWeek === 3) return 'мкр. Заря';
+    if (dayOfWeek === 2 || dayOfWeek === 4) return 'Поле чудес';
     return 'Яндекс Телемост';
 }
 
@@ -41,13 +41,10 @@ function getTrainingDuration() {
 function getNextTrainingDay(currentDate) {
     const days = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
     let nextDate = new Date(currentDate);
-    
     nextDate.setDate(nextDate.getDate() + 1);
-    
     while (!isTrainingDay(nextDate)) {
         nextDate.setDate(nextDate.getDate() + 1);
     }
-    
     const dayName = days[nextDate.getDay()];
     const time = getTrainingTime(nextDate);
     return `${dayName}, ${nextDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}, начало в ${time}`;
@@ -99,6 +96,7 @@ function createPollText(dateKey, poll) {
     const total = yesCount + noCount + maybeCount;
     
     const date = new Date(dateKey);
+    const dayOfWeek = date.getDay();
     const formattedDate = date.toLocaleDateString('ru-RU', {
         weekday: 'long',
         day: 'numeric',
@@ -106,12 +104,20 @@ function createPollText(dateKey, poll) {
     });
     
     const trainingTime = getTrainingTime(date);
+    const location = getTrainingLocation(date);
     const trainingLink = getTrainingLink();
     
     let text = `🏋️‍♀️ **${formattedDate}**\n`;
     text += `💪 **ТАБАТА тренировка**\n\n`;
     text += `⏰ Время: **${trainingTime}**\n`;
-    text += `🎥 Платформа: **Яндекс Телемост**\n`;
+    
+    // Проверяем день недели: ПН(1), ВТ(2), СР(3), ЧТ(4)
+    if (dayOfWeek >= 1 && dayOfWeek <= 4) {
+        text += `📍 Место: **${location}**\n`;
+    } else {
+        text += `🎥 Платформа: **${location}**\n`;
+    }
+    
     text += `⌛ Длительность: **${getTrainingDuration()}**\n\n`;
     
     if (total === 0) {
@@ -121,31 +127,27 @@ function createPollText(dateKey, poll) {
         
         if (yesCount > 0) {
             text += `✅ **Идут (${yesCount}):**\n`;
-            poll.yes.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
+            poll.yes.forEach((name, i) => { text += `${i + 1}. ${name}\n`; });
             text += `\n`;
         }
-        
         if (maybeCount > 0) {
             text += `❓ **Возможно (${maybeCount}):**\n`;
-            poll.maybe.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
+            poll.maybe.forEach((name, i) => { text += `${i + 1}. ${name}\n`; });
             text += `\n`;
         }
-        
         if (noCount > 0) {
             text += `❌ **Не идут (${noCount}):**\n`;
-            poll.no.forEach((name, i) => {
-                text += `${i + 1}. ${name}\n`;
-            });
+            poll.no.forEach((name, i) => { text += `${i + 1}. ${name}\n`; });
             text += `\n`;
         }
     }
     
-    text += `🔗 [Ссылка для подключения](${trainingLink})\n\n`;
-    text += `⏰ _Подключайтесь за 5 минут до старта!_\n\n`;
+    // Ссылку показываем только для онлайн-занятий (выходные)
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+        text += `🔗 [Ссылка для подключения](${trainingLink})\n\n`;
+        text += `⏰ _Подключайтесь за 5 минут до старта!_\n\n`;
+    }
+    
     text += `Используйте кнопки ниже:`;
     
     return text;
@@ -239,16 +241,19 @@ async function handlePollResponse(ctx, responseType) {
             await updatePollInChat(chatId);
         }
         
-        // Отправляем подтверждение в ЛС
+        // Получаем данные для конкретного дня
+        const todayDate = new Date();
+        const dayOfWeek = todayDate.getDay();
+        const location = getTrainingLocation(todayDate);
         const trainingLink = getTrainingLink();
-        const trainingTime = getTrainingTime(new Date());
+        const trainingTime = getTrainingTime(todayDate);
         
         const responseMessages = {
             yes: `✅ **Вы записались на тренировку!**\n\n` +
                  `⏰ Время: **${trainingTime}**\n` +
-                 `🎥 Платформа: **Яндекс Телемост**\n` +
-                 `🔗 [Ссылка для подключения](${trainingLink})\n\n` +
-                 `⏰ _Подключайтесь за 5 минут до старта!_\n\n` +
+                 (dayOfWeek >= 1 && dayOfWeek <= 4 
+                     ? `📍 Место: **${location}**\n\n` 
+                     : `🎥 Платформа: **${location}**\n🔗 [Ссылка для подключения](${trainingLink})\n\n⏰ _Подключайтесь за 5 минут до старта!_\n\n`) +
                  `💪 Хорошей тренировки!`,
             no: `❌ **Вы отметили, что не придете.**\n\nУвидимся в следующий раз!`,
             maybe: `❓ **Вы отметились как "Возможно".**\n\n_Подтвердите участие позже!_`
@@ -293,12 +298,13 @@ async function showSchedule(ctx) {
         let text = `**📅 РАСПИСАНИЕ ТРЕНИРОВОК**\n\n`;
         
         text += `**🗓️ РЕЖИМ РАБОТЫ:**\n`;
-        text += `└─ Понедельник: **19:15**\n`;
-        text += `└─ Среда: **19:15**\n`;
-        text += `└─ Пятница: **19:15**\n`;
-        text += `└─ Суббота: **18:00**\n`;
-        text += `└─ Воскресенье: **18:00**\n`;
-        text += `└─ Вторник, Четверг: выходной\n\n`;
+        text += `└─ Понедельник: **20:00** (мкр. Заря)\n`;
+        text += `└─ Вторник: **18:30** (Поле чудес)\n`;
+        text += `└─ Среда: **20:00** (мкр. Заря)\n`;
+        text += `└─ Четверг: **18:30** (Поле чудес)\n`;
+        text += `└─ Суббота: **18:00** (Яндекс Телемост)\n`;
+        text += `└─ Воскресенье: **18:00** (Яндекс Телемост)\n`;
+        text += `└─ Пятница: выходной\n\n`;
         
         text += `**📅 СЕГОДНЯ (${dayName}):**\n`;
         if (isTodayTraining) {

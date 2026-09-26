@@ -1,5 +1,6 @@
 // bot.js - УПРОЩЕННАЯ ВЕРСИЯ: ТОЛЬКО ОПРОСЫ, ЗАПИСЬ И РАСПИСАНИЕ
 require('dotenv').config();
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const { Bot, Keyboard } = require('@maxhub/max-bot-api');
 
 const bot = new Bot(process.env.BOT_TOKEN);

@@ -20,7 +20,7 @@ function getTrainingTime(date) {
     const dayOfWeek = date.getDay();
     if (dayOfWeek === 1 || dayOfWeek === 3) return '20:00'; // ПН, СР
     if (dayOfWeek === 2 || dayOfWeek === 4) return '18:30'; // ВТ, ЧТ
-    return '19:00'; // СБ, ВС
+    return '18:00'; // СБ, ВС
 }
 
 function getTrainingLocation(date) {
@@ -123,7 +123,7 @@ function createPollText(dateKey, poll) {
     if (total === 0) {
         text += `🤨 _Пока никто не записался!_\n\n`;
     } else {
-        text += `👥 **Проголосовало: ${total}**\n\n`;
+        text += `👥 **Ответили: ${total}**\n\n`;
         
         if (yesCount > 0) {
             text += `✅ **Идут (${yesCount}):**\n`;

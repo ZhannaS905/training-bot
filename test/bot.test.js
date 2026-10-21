@@ -61,7 +61,7 @@ test('ID-based vote change/cancel, durable state, independent chats and stale bu
   const forged = vote(restored, 3, 'yes'); forged.message.body.mid = 'other'; await deliver(f, forged); assert.equal(restored.votes['3'], undefined);
   f.now('2026-10-20T07:00:00Z'); await f.service.tick(); await deliver(f, vote(restored, 4, 'yes'));
   assert.deepEqual(f.store.state.polls['-1/2026-10-20'].votes, {});
-  assert.deepEqual(body(restored).attachments[0].payload.buttons.flat().map(b => b.text), ['Приду','Не приду','Возможно','Отменить']);
+  assert.deepEqual(body(restored).attachments[0].payload.buttons.flat().map(b => b.text), ['✅ Приду','❌ Не приду','❓ Возможно','↩️ Отменить']);
 });
 test('uncertain publication is never resent, including after restart', async t => {
   const f = fixture(t); let attempts = 0;
@@ -113,4 +113,33 @@ test('webhook secret and durable receipt before acknowledgment (loopback only)',
   assert.equal((await fetch(url, { method: 'POST', headers: { 'X-Max-Bot-Api-Secret': 'test_secret_123456' }, body: JSON.stringify(command(9)) })).status, 200);
   assert.equal(Object.keys(f.store.state.inbox).length, 1); assert.equal(f.calls.send.length, 0);
   f.restart(); await f.service.drain(); assert.equal(f.calls.send.length, 1);
+});
+test('screenshot layout: Wednesday date, location, duration, named participants and four buttons', () => {
+  const result = body({ id: 'test', date: '2026-10-21', votes: { 1: 'yes', 2: 'yes' }, names: { 1: 'Елена', 2: 'Инна' } });
+  assert.equal(result.format, 'html');
+  assert.equal(result.text, '🏋️‍♀️ <b>среда, 21 октября</b>\n💪 <b>ТАБАТА тренировка</b>\n\n⏰ Время: <b>20:00</b>\n📍 Место: <b>мкр. Заря</b>\n⌛ Длительность: <b>60 минут</b>\n\n👥 <b>Ответили: 2</b>\n\n<b>✅ Идут (2):</b>\n1. Елена\n2. Инна\n\nИспользуйте кнопки ниже:');
+  assert.deepEqual(result.attachments[0].payload.buttons.map(row => row.map(b => b.text)), [['✅ Приду','❌ Не приду'], ['❓ Возможно','↩️ Отменить']]);
+});
+test('poll locations and times agree with the source weekly schedule', () => {
+  for (const [date, time, place] of [
+    ['19','20:00','мкр. Заря'], ['20','18:30','Поле чудес'], ['21','20:00','мкр. Заря'],
+    ['22','18:30','Поле чудес'], ['24','18:00','Яндекс Телемост'], ['25','18:00','Яндекс Телемост']
+  ]) {
+    const { text } = body({ id: 'test', date: `2026-10-${date}`, votes: {} });
+    assert.ok(text.includes(`<b>${time}</b>`)); assert.ok(text.includes(`<b>${place}</b>`));
+    assert.equal(text.includes('Ссылка для подключения'), Number(date) >= 24);
+  }
+});
+test('display names survive restart, escape markup and follow change/cancel by ID', async t => {
+  const f = fixture(t); await f.service.tick(); let p = f.store.state.polls['-1/2026-10-19'];
+  const event = vote(p, 1, 'yes'); event.callback.user.first_name = '<b>Елена</b>\n&';
+  await deliver(f, event); await deliver(f, vote(p, 2, 'yes')); f.restart();
+  p = f.store.state.polls['-1/2026-10-19'];
+  assert.ok(body(p).text.includes('1. &lt;b&gt;Елена&lt;/b&gt; &amp;'));
+  assert.ok(body(p).text.includes('Идут (2)'));
+  await deliver(f, vote(p, 2, 'maybe')); assert.ok(body(p).text.includes('❓ Возможно (1)'));
+  await deliver(f, vote(p, 1, 'cancel')); assert.equal(p.names['1'], undefined);
+  assert.ok(!body(p).text.includes('Елена'));
+  const legacy = { id: 'test', date: '2026-10-21', votes: { 3: 'no' } };
+  assert.ok(body(legacy).text.includes('Участник 3'));
 });

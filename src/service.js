@@ -1,17 +1,36 @@
 const { randomUUID, createHash } = require('node:crypto');
 const { moscow, times, scheduleText } = require('./schedule');
 function id(value) { return typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : null; }
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 function body(poll) {
-  const day = new Date(`${poll.date}T12:00:00Z`).getUTCDay();
-  const place = day === 1 || day === 3 ? 'мкр. Заря' : day === 2 || day === 4 ? 'Поле чудес' :
-    'Яндекс Телемост\nhttps://telemost.yandex.ru/j/35289250295816';
-  const counts = Object.values(poll.votes).reduce((a, v) => { a[v]++; return a; }, { yes: 0, no: 0, maybe: 0 });
+  const date = new Date(`${poll.date}T12:00:00Z`);
+  const day = date.getUTCDay();
+  const place = day === 1 || day === 3 ? 'мкр. Заря' : day === 2 || day === 4 ? 'Поле чудес' : 'Яндекс Телемост';
+  const formattedDate = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long'
+  }).format(date);
+  let text = `🏋️‍♀️ <b>${formattedDate}</b>\n💪 <b>ТАБАТА тренировка</b>\n\n⏰ Время: <b>${times[day]}</b>\n`;
+  text += `${day >= 1 && day <= 4 ? '📍 Место' : '🎥 Платформа'}: <b>${place}</b>\n⌛ Длительность: <b>60 минут</b>\n\n`;
+  const entries = Object.entries(poll.votes);
+  if (!entries.length) text += '🤨 <i>Пока никто не записался!</i>\n\n';
+  else {
+    text += `👥 <b>Ответили: ${entries.length}</b>\n\n`;
+    for (const [choice, label] of [['yes', '✅ Идут'], ['maybe', '❓ Возможно'], ['no', '❌ Не идут']]) {
+      const users = entries.filter(([, vote]) => vote === choice);
+      if (!users.length) continue;
+      text += `<b>${label} (${users.length}):</b>\n`;
+      text += users.map(([user], i) => `${i + 1}. ${escapeHtml(poll.names?.[user] || `Участник ${user}`)}`).join('\n') + '\n\n';
+    }
+  }
+  if (day === 0 || day === 6) text += '🔗 <a href="https://telemost.yandex.ru/j/35289250295816">Ссылка для подключения</a>\n\n⏰ <i>Подключайтесь за 5 минут до старта!</i>\n\n';
+  text += 'Используйте кнопки ниже:';
   const button = (text, choice) => ({ type: 'callback', text, payload: `poll:${poll.id}:${choice}` });
-  return { text: `ТАБАТА — ${poll.date}, ${times[day]} (Europe/Moscow)\n${place}\n60 минут\nПриду: ${counts.yes}\nНе приду: ${counts.no}\nВозможно: ${counts.maybe}`,
-    attachments: [{ type: 'inline_keyboard', payload: { buttons: [
-      [button('Приду', 'yes'), button('Не приду', 'no')],
-      [button('Возможно', 'maybe'), button('Отменить', 'cancel')]
-    ] } }] };
+  return { text, format: 'html', attachments: [{ type: 'inline_keyboard', payload: { buttons: [
+    [button('✅ Приду', 'yes'), button('❌ Не приду', 'no')],
+    [button('❓ Возможно', 'maybe'), button('↩️ Отменить', 'cancel')]
+  ] } }] };
 }
 class Service {
   constructor(store, api, config, now = () => new Date()) {
@@ -68,8 +87,16 @@ class Service {
         const today = moscow(this.now()).date;
         const poll = state.polls[`${chat}/${today}`];
         if (user && match && poll?.status === 'published' && poll.id === match[1] && poll.mid === message?.body?.mid) {
-          if (match[2] === 'cancel') delete poll.votes[user];
-          else poll.votes[user] = match[2];
+          if (match[2] === 'cancel') {
+            delete poll.votes[user];
+            if (poll.names) delete poll.names[user];
+          } else {
+            poll.votes[user] = match[2];
+            const profile = update.callback.user;
+            const name = [profile.first_name, profile.last_name].filter(x => typeof x === 'string').join(' ').replace(/[\r\n\t]+/g, ' ').trim();
+            poll.names ||= {};
+            poll.names[user] = name || `Участник ${user}`;
+          }
           poll.dirty = true;
         }
       } else if (update.update_type === 'message_created') {

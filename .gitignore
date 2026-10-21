@@ -29,3 +29,7 @@ data/
 .env.*
 !.env.example
 *.patch
+
+# Isolated Training Test state
+.test-state/
+bothost-test.env

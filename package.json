@@ -4,7 +4,7 @@
   "private": true,
   "description": "Расписание тренировок и устойчивые опросы MAX",
   "main": "bot.js",
-  "scripts": {"start": "node --env-file=.env bot.js", "test": "node --test", "check": "node --check bot.js && node --test"},
+  "scripts": {"start:bothost:test": "node bothost-test.cjs", "start": "node --env-file=.env bot.js", "test": "node --test", "check": "node --check bot.js && node --test"},
   "engines": {"node": ">=22.0.0"},
   "license": "MIT"
 }

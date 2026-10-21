@@ -23,3 +23,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Новое хранилище, отдельно от архива logs/
+data/
+.env.*
+!.env.example
+*.patch

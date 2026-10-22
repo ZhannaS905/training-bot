@@ -11,25 +11,17 @@ function body(poll) {
   const formattedDate = new Intl.DateTimeFormat('ru-RU', {
     timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long'
   }).format(date);
-  let text = `🏋️‍♀️ <b>${formattedDate}</b>\n💪 <b>ТАБАТА тренировка</b>\n\n⏰ Время: <b>${times[day]}</b>\n`;
-  text += `${day >= 1 && day <= 4 ? '📍 Место' : '🎥 Платформа'}: <b>${place}</b>\n⌛ Длительность: <b>60 минут</b>\n\n`;
-  const entries = Object.entries(poll.votes);
-  if (!entries.length) text += '🤨 <i>Пока никто не записался!</i>\n\n';
-  else {
-    text += `👥 <b>Ответили: ${entries.length}</b>\n\n`;
-    for (const [choice, label] of [['yes', '✅ Идут'], ['maybe', '❓ Возможно'], ['no', '❌ Не идут']]) {
-      const users = entries.filter(([, vote]) => vote === choice);
-      if (!users.length) continue;
-      text += `<b>${label} (${users.length}):</b>\n`;
-      text += users.map(([user], i) => `${i + 1}. ${escapeHtml(poll.names?.[user] || `Участник ${user}`)}`).join('\n') + '\n\n';
-    }
-  }
-  if (day === 0 || day === 6) text += '🔗 <a href="https://telemost.yandex.ru/j/35289250295816">Ссылка для подключения</a>\n\n⏰ <i>Подключайтесь за 5 минут до старта!</i>\n\n';
-  text += 'Используйте кнопки ниже:';
+  let text = `📅 <b>${formattedDate}</b>\n`;
+  text += `📍 Место: <b>${place}</b>\n⏰ Время: <b>${times[day]}</b>\n\n`;
+  const users = Object.entries(poll.votes).filter(([, choice]) => choice === 'yes');
+  text += `<b>✅ Идут (${users.length}):</b>\n`;
+  text += users.length
+    ? users.map(([user], i) => `${i + 1}. ${escapeHtml(poll.names?.[user] || `Участник ${user}`)}`).join('\n')
+    : 'Пока никто не записался.';
+  if (day === 0 || day === 6) text += '\n\n🔗 <a href="https://telemost.yandex.ru/j/35289250295816">Ссылка для подключения</a>';
   const button = (text, choice) => ({ type: 'callback', text, payload: `poll:${poll.id}:${choice}` });
   return { text, format: 'html', attachments: [{ type: 'inline_keyboard', payload: { buttons: [
-    [button('✅ Приду', 'yes'), button('❌ Не приду', 'no')],
-    [button('❓ Возможно', 'maybe'), button('↩️ Отменить', 'cancel')]
+    [button('✅ Приду', 'yes'), button('↩️ Отменить', 'cancel')]
   ] } }] };
 }
 class Service {

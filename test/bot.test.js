@@ -61,7 +61,7 @@ test('ID-based vote change/cancel, durable state, independent chats and stale bu
   const forged = vote(restored, 3, 'yes'); forged.message.body.mid = 'other'; await deliver(f, forged); assert.equal(restored.votes['3'], undefined);
   f.now('2026-10-20T07:00:00Z'); await f.service.tick(); await deliver(f, vote(restored, 4, 'yes'));
   assert.deepEqual(f.store.state.polls['-1/2026-10-20'].votes, {});
-  assert.deepEqual(body(restored).attachments[0].payload.buttons.flat().map(b => b.text), ['✅ Приду','❌ Не приду','❓ Возможно','↩️ Отменить']);
+  assert.deepEqual(body(restored).attachments[0].payload.buttons.flat().map(b => b.text), ['✅ Приду','↩️ Отменить']);
 });
 test('uncertain publication is never resent, including after restart', async t => {
   const f = fixture(t); let attempts = 0;
@@ -114,11 +114,14 @@ test('webhook secret and durable receipt before acknowledgment (loopback only)',
   assert.equal(Object.keys(f.store.state.inbox).length, 1); assert.equal(f.calls.send.length, 0);
   f.restart(); await f.service.drain(); assert.equal(f.calls.send.length, 1);
 });
-test('screenshot layout: Wednesday date, location, duration, named participants and four buttons', () => {
+test('signup layout: date, location, time, named participants and two callback buttons', () => {
   const result = body({ id: 'test', date: '2026-10-21', votes: { 1: 'yes', 2: 'yes' }, names: { 1: 'Елена', 2: 'Инна' } });
   assert.equal(result.format, 'html');
-  assert.equal(result.text, '🏋️‍♀️ <b>среда, 21 октября</b>\n💪 <b>ТАБАТА тренировка</b>\n\n⏰ Время: <b>20:00</b>\n📍 Место: <b>мкр. Заря</b>\n⌛ Длительность: <b>60 минут</b>\n\n👥 <b>Ответили: 2</b>\n\n<b>✅ Идут (2):</b>\n1. Елена\n2. Инна\n\nИспользуйте кнопки ниже:');
-  assert.deepEqual(result.attachments[0].payload.buttons.map(row => row.map(b => b.text)), [['✅ Приду','❌ Не приду'], ['❓ Возможно','↩️ Отменить']]);
+  assert.equal(result.text, '📅 <b>среда, 21 октября</b>\n📍 Место: <b>мкр. Заря</b>\n⏰ Время: <b>20:00</b>\n\n<b>✅ Идут (2):</b>\n1. Елена\n2. Инна');
+  assert.deepEqual(result.attachments[0].payload.buttons, [[
+    { type: 'callback', text: '✅ Приду', payload: 'poll:test:yes' },
+    { type: 'callback', text: '↩️ Отменить', payload: 'poll:test:cancel' }
+  ]]);
 });
 test('poll locations and times agree with the source weekly schedule', () => {
   for (const [date, time, place] of [
@@ -137,9 +140,30 @@ test('display names survive restart, escape markup and follow change/cancel by I
   p = f.store.state.polls['-1/2026-10-19'];
   assert.ok(body(p).text.includes('1. &lt;b&gt;Елена&lt;/b&gt; &amp;'));
   assert.ok(body(p).text.includes('Идут (2)'));
-  await deliver(f, vote(p, 2, 'maybe')); assert.ok(body(p).text.includes('❓ Возможно (1)'));
+  await deliver(f, vote(p, 2, 'maybe')); assert.ok(body(p).text.includes('Идут (1)')); assert.equal(p.votes['2'], 'maybe');
   await deliver(f, vote(p, 1, 'cancel')); assert.equal(p.names['1'], undefined);
   assert.ok(!body(p).text.includes('Елена'));
   const legacy = { id: 'test', date: '2026-10-21', votes: { 3: 'no' } };
-  assert.ok(body(legacy).text.includes('Участник 3'));
+  assert.ok(!body(legacy).text.includes('Участник 3')); assert.equal(legacy.votes['3'], 'no');
+});
+
+test('signup/cancel/rejoin survives restart without changing previous polls or legacy votes', async t => {
+  const f = fixture(t); await f.service.tick();
+  let p = f.store.state.polls['-1/2026-10-19'];
+  await deliver(f, vote(p, 1, 'yes'));
+  await deliver(f, vote(p, 1, 'yes'));
+  assert.equal(Object.keys(p.votes).length, 1);
+  f.restart(); p = f.store.state.polls['-1/2026-10-19'];
+  assert.equal(p.names['1'], 'Одинаковое имя');
+  await deliver(f, vote(p, 1, 'cancel'));
+  await deliver(f, vote(p, 1, 'cancel'));
+  assert.ok(body(p).text.includes('Пока никто не записался.'));
+  await deliver(f, vote(p, 1, 'yes'));
+  const previous = JSON.stringify(p);
+  f.now('2026-10-20T07:00:00Z'); await f.service.tick(); f.restart();
+  assert.equal(JSON.stringify(f.store.state.polls['-1/2026-10-19']), previous);
+  const legacy = { id: 'legacy', date: '2026-10-21', votes: { 1: 'yes', 2: 'maybe', 3: 'no', 4: 'yes' }, names: { 1: 'Елена', 2: 'Инна', 3: 'Анна' } };
+  const saved = JSON.stringify(legacy);
+  assert.ok(body(legacy).text.includes('1. Елена\n2. Участник 4'));
+  assert.equal(JSON.stringify(legacy), saved);
 });

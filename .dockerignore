@@ -1,0 +1,18 @@
+# Only the minimal read-only Training Test profile enters the build context.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!bothost-test.cjs
+!src/
+!src/api.js
+!src/store.js
+!src/webhook.js
+!src/test-bot-identity.js
+!src/bothost-test-api.js
+!src/bothost-test-config.js
+!src/bothost-test-runtime.js
+!src/bothost-test-storage.js
+!src/bothost-test-tls.js
+!certs/
+!certs/russian-trusted-root-ca.pem

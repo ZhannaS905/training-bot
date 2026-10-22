@@ -3,6 +3,22 @@ const { checkTestBotIdentity } = require('./test-bot-identity');
 const CHAT = '-80345864298680';
 const STATE_DIR = '/app/data/training-test/live';
 const CA_PATH = path.resolve(__dirname, '../certs/russian-trusted-root-ca.pem');
+function assertNodeVersion(version) {
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(version) || Number(version.split('.')[0]) < 22) throw Error('NODE_VERSION_REQUIRED');
+}
+function safeStartupReason(error) {
+  const allowed = new Set(['NODE_VERSION_REQUIRED', 'TEST_CONFIG', 'TEST_ADMIN_CONFIG', 'TEST_BIND',
+    'TEST_STORAGE_PATH', 'TLS_REQUIRED', 'NODE_PRELOAD_REFUSED', 'UNEXPECTED_CA', 'TOKEN_CONFLICT',
+    'TEST_TOKEN_REQUIRED', 'WEBHOOK_SECRET_REQUIRED', 'EXPECTED_ID_REQUIRED', 'EXPECTED_STATE_REQUIRED',
+    'WRITES_NOT_AUTHORIZED', 'CA_REFUSED', 'WORKER_CONFIG', 'TEST_IDENTITY_REFUSED', 'TEST_CHAT_REFUSED',
+    'TEST_MEMBERSHIP_REFUSED', 'API_OPERATION_BLOCKED', 'STORAGE_PATH_REFUSED', 'LINKED_STORAGE_REFUSED',
+    'STATE_FILE_REFUSED', 'STATE_HASH_REFUSED', 'EXPECTED_HISTORY_REQUIRED', 'STATE_POLL_REFUSED',
+    'STATE_MESSAGE_REFUSED', 'STATE_VOTE_REFUSED', 'STATE_HISTORY_REFUSED']);
+  if (allowed.has(error?.message)) return error.message;
+  if (/^MAX HTTP [1-5]\d{2}$/.test(error?.message || '')) return error.message;
+  // Unknown exceptions can contain paths, response data or credentials.
+  return 'STARTUP_REFUSED';
+}
 function loadBothostTestConfig(env = process.env) {
   if (env.BOT_MODE !== 'test' || env.CHAT_IDS !== CHAT) throw Error('TEST_CONFIG');
   // No administrative commands run in this profile. Personal administrator IDs
@@ -37,4 +53,4 @@ function workerEnvironment(config) {
     AUTO_PUBLISH: 'false', TEST_ALLOW_SEND: 'false', TEST_ALLOW_EDIT: 'false', TEST_ALLOW_DELETE: 'false',
     NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_EXTRA_CA_CERTS: CA_PATH };
 }
-module.exports = { CHAT, STATE_DIR, CA_PATH, loadBothostTestConfig, workerEnvironment };
+module.exports = { CHAT, STATE_DIR, CA_PATH, loadBothostTestConfig, workerEnvironment, assertNodeVersion, safeStartupReason };

@@ -183,7 +183,7 @@ test('entrypoint starts only a clean worker and forwards graceful shutdown; impo
   const events = new Map(); const child = new (require('node:events').EventEmitter)();
   child.kill = signal => { assert.equal(signal, 'SIGTERM'); child.emit('exit', 0); };
   const sandbox = { module: { exports: {} }, __filename: path.resolve(__dirname, '../bothost-test.cjs'), console: { log() {} },
-    process: { env: { ...safe, UNRELATED_SECRET: 'never inherit' }, argv: ['node', 'bothost-test.cjs'], execPath: process.execPath,
+    process: { env: { ...safe, UNRELATED_SECRET: 'never inherit' }, versions: { node: process.versions.node }, argv: ['node', 'bothost-test.cjs'], execPath: process.execPath,
       on: (name, callback) => events.set(name, callback), removeListener: name => events.delete(name) } };
   sandbox.require = name => {
     if (name === 'node:child_process') return { spawn: (executable, args, options) => {

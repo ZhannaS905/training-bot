@@ -1,7 +1,8 @@
 // Dedicated BotHost entry point. Never loads .env, bot.js or test-launch.cjs.
-const { loadBothostTestConfig, workerEnvironment, CA_PATH } = require('./src/bothost-test-config');
+const { loadBothostTestConfig, workerEnvironment, CA_PATH, assertNodeVersion, safeStartupReason } = require('./src/bothost-test-config');
 const { validateCertificate } = require('./src/bothost-test-tls');
 async function main() {
+  assertNodeVersion(process.versions.node);
   const config = loadBothostTestConfig(process.env);
   validateCertificate();
   if (process.argv.length === 2) {
@@ -26,8 +27,8 @@ async function main() {
     console.log('Training Test: identity and expected storage verified; read-only mode, publication and API writes blocked.');
   }
 }
-if (require.main === module) main().catch(() => {
-  console.error('Training Test BotHost startup refused. Check test configuration, identity, TLS and expected storage. Secrets hidden.');
+if (require.main === module) main().catch(error => {
+  console.error(`Training Test BotHost startup refused: ${safeStartupReason(error)}. Secrets hidden.`);
   process.exitCode = 1;
 });
 module.exports = { main };

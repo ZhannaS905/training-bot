@@ -33,3 +33,13 @@ data/
 # Isolated Training Test state
 .test-state/
 bothost-test.env
+
+# Runtime state, lock directories, archives and private key containers
+state.json
+state.tmp
+.lock/
+archive/
+archives/
+*.key
+*.p12
+*.pfx

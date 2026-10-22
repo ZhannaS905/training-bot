@@ -2,7 +2,7 @@ const http = require('node:http');
 const { createWebhook } = require('./webhook');
 const { createBothostTestApi } = require('./bothost-test-api');
 const { openBothostStorage } = require('./bothost-test-storage');
-const { CHAT } = require('./bothost-test-config');
+const { CHAT, markStartup } = require('./bothost-test-config');
 async function startBothostTest(config, { fetchImpl = fetch, createServer = handler => http.createServer(handler) } = {}) {
   const api = await createBothostTestApi(config, fetchImpl);
   const store = openBothostStorage(config);
@@ -25,6 +25,7 @@ async function startBothostTest(config, { fetchImpl = fetch, createServer = hand
       server.listen(config.port, config.host, resolve);
     });
   } catch (error) {
+    markStartup(error, 'HTTP_LISTEN');
     if (server?.listening) await new Promise(resolve => server.close(resolve));
     store.close(); throw error;
   }

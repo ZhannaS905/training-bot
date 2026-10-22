@@ -19,6 +19,32 @@ function safeStartupReason(error) {
   // Unknown exceptions can contain paths, response data or credentials.
   return 'STARTUP_REFUSED';
 }
+// Metadata stays private; arbitrary error properties are never logged.
+const startupStages = new WeakMap();
+const STAGES = new Set(['CA', 'API_ME', 'API_CHAT', 'API_MEMBER', 'STATE_READ', 'STATE_JSON', 'STATE_LOCK', 'HTTP_LISTEN', 'WORKER']);
+const SYSTEM_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EROFS', 'EEXIST', 'ENOTDIR', 'EISDIR', 'EMFILE', 'ENFILE', 'ENOSPC', 'EIO', 'EADDRINUSE', 'EADDRNOTAVAIL']);
+const NETWORK_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET']);
+const TLS_CODES = new Set(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'ERR_TLS_CERT_ALTNAME_INVALID', 'ERR_SSL_WRONG_VERSION_NUMBER']);
+function markStartup(error, stage) {
+  if (error && (typeof error === 'object' || typeof error === 'function') && STAGES.has(stage) && !startupStages.has(error)) startupStages.set(error, stage);
+  return error;
+}
+function safeStartupDiagnostic(error) {
+  const reason = safeStartupReason(error);
+  if (reason !== 'STARTUP_REFUSED') return reason;
+  const stage = startupStages.get(error) || 'UNKNOWN';
+  const api = ['API_ME', 'API_CHAT', 'API_MEMBER'].includes(stage);
+  let code = 'UNKNOWN';
+  if (api) {
+    const candidates = [error?.code, error?.cause?.code];
+    code = candidates.find(value => TLS_CODES.has(value)) || candidates.find(value => NETWORK_CODES.has(value)) ||
+      (['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT_OR_ABORT' :
+        error instanceof SyntaxError ? 'INVALID_JSON' : error?.message === 'MAX rejected request' ? 'API_REJECTED' : 'API_ERROR');
+  } else if (stage === 'STATE_JSON') code = error instanceof SyntaxError ? 'INVALID_JSON' : 'UNKNOWN';
+  else if (SYSTEM_CODES.has(error?.code)) code = error.code;
+  else if (stage === 'CA') code = 'CA_ERROR';
+  return `STARTUP_REFUSED stage=${stage} code=${code}`;
+}
 function loadBothostTestConfig(env = process.env) {
   if (env.BOT_MODE !== 'test' || env.CHAT_IDS !== CHAT) throw Error('TEST_CONFIG');
   // No administrative commands run in this profile. Personal administrator IDs
@@ -53,4 +79,4 @@ function workerEnvironment(config) {
     AUTO_PUBLISH: 'false', TEST_ALLOW_SEND: 'false', TEST_ALLOW_EDIT: 'false', TEST_ALLOW_DELETE: 'false',
     NODE_TLS_REJECT_UNAUTHORIZED: '1', NODE_EXTRA_CA_CERTS: CA_PATH };
 }
-module.exports = { CHAT, STATE_DIR, CA_PATH, loadBothostTestConfig, workerEnvironment, assertNodeVersion, safeStartupReason };
+module.exports = { CHAT, STATE_DIR, CA_PATH, loadBothostTestConfig, workerEnvironment, assertNodeVersion, safeStartupReason, markStartup, safeStartupDiagnostic };

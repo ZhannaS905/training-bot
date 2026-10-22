@@ -1,10 +1,10 @@
 // Dedicated BotHost entry point. Never loads .env, bot.js or test-launch.cjs.
-const { loadBothostTestConfig, workerEnvironment, CA_PATH, assertNodeVersion, safeStartupReason } = require('./src/bothost-test-config');
+const { loadBothostTestConfig, workerEnvironment, CA_PATH, assertNodeVersion, markStartup, safeStartupDiagnostic } = require('./src/bothost-test-config');
 const { validateCertificate } = require('./src/bothost-test-tls');
 async function main() {
   assertNodeVersion(process.versions.node);
   const config = loadBothostTestConfig(process.env);
-  validateCertificate();
+  try { validateCertificate(); } catch (error) { throw markStartup(error, 'CA'); }
   if (process.argv.length === 2) {
     // NODE_EXTRA_CA_CERTS is consumed when Node starts, not after startup.
     // A clean child also removes BotHost token aliases and preload settings.
@@ -14,7 +14,7 @@ async function main() {
     const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM');
     process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
     await new Promise((resolve, reject) => {
-      child.once('error', reject);
+      child.once('error', error => reject(markStartup(error, 'WORKER')));
       child.once('exit', (code) => { process.exitCode = code ?? 1; resolve(); });
     });
     process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
@@ -28,7 +28,7 @@ async function main() {
   }
 }
 if (require.main === module) main().catch(error => {
-  console.error(`Training Test BotHost startup refused: ${safeStartupReason(error)}. Secrets hidden.`);
+  console.error(`Training Test BotHost startup refused: ${safeStartupDiagnostic(error)}. Secrets hidden.`);
   process.exitCode = 1;
 });
 module.exports = { main };

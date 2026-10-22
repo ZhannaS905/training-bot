@@ -2,9 +2,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { Store } = require('./store');
-const { CHAT } = require('./bothost-test-config');
+const { CHAT, markStartup } = require('./bothost-test-config');
 function record(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function inspectStorage(dir, expectedHash) {
+  try { return inspectStorageContents(dir, expectedHash); }
+  catch (error) { throw markStartup(error, 'STATE_READ'); }
+}
+function inspectStorageContents(dir, expectedHash) {
   let current = path.parse(dir).root;
   for (const part of dir.slice(current.length).split(path.sep)) {
     current = path.join(current, part);
@@ -18,7 +22,9 @@ function inspectStorage(dir, expectedHash) {
   if (!stat.isFile() || stat.nlink !== 1) throw Error('STATE_FILE_REFUSED');
   const bytes = fs.readFileSync(file);
   if (createHash('sha256').update(bytes).digest('hex') !== expectedHash) throw Error('STATE_HASH_REFUSED');
-  const state = JSON.parse(bytes);
+  let state;
+  try { state = JSON.parse(bytes); }
+  catch (error) { throw markStartup(error, 'STATE_JSON'); }
   if (state?.version !== 1 || !record(state.polls) || !record(state.done) || !record(state.inbox) ||
       Object.keys(state.polls).length === 0 || Object.keys(state.done).length === 0 || Object.keys(state.inbox).length !== 0) throw Error('EXPECTED_HISTORY_REQUIRED');
   for (const [key, poll] of Object.entries(state.polls)) {
@@ -38,7 +44,9 @@ function inspectStorage(dir, expectedHash) {
 function openBothostStorage(config) {
   // Never mkdir an empty STATE_DIR, never generate state, never break a lock.
   inspectStorage(config.stateDir, config.expectedStateHash);
-  const store = new Store(config.stateDir);
+  let store;
+  try { store = new Store(config.stateDir); }
+  catch (error) { throw markStartup(error, error instanceof SyntaxError ? 'STATE_JSON' : 'STATE_LOCK'); }
   try { inspectStorage(config.stateDir, config.expectedStateHash); }
   catch (error) { store.close(); throw error; }
   return store;

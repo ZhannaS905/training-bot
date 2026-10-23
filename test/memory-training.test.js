@@ -5,7 +5,7 @@ const event=(p,choice='yes',cid='a')=>({update_type:'message_callback',callback:
 test('schedule, Friday, Moscow publication/deletion boundaries, concurrent duplicate guard',async()=>{
  for(let day=19;day<=25;day++){const f=fixture();f.time(`2026-10-${day}T06:59:00Z`);await f.s.tick();assert.equal(f.calls.send.length,0);f.time(`2026-10-${day}T07:00:00Z`);await Promise.all([f.s.tick(),f.s.tick()]);assert.equal(f.calls.send.length,day===23?0:1);if(day!==23){const p=[...f.s.polls.values()][0];const b=body(p);assert(b.text.includes(['20:00','18:30','20:00','18:30',null,'18:00','18:00'][day-19]));assert.deepEqual(b.attachments[0].payload.buttons[0].map(x=>x.text),['✅ Приду','↩️ Отменить']);f.time(`2026-10-${day}T18:59:00Z`);await f.s.tick();assert.equal(f.calls.remove.length,0);f.time(`2026-10-${day}T19:00:00Z`);await f.s.tick();await f.s.tick();assert.equal(f.calls.remove.length,1);}}
 });
-test('names, duplicate receipt, cancellation, foreign/stale callback and restart isolation',async()=>{const f=fixture();await f.s.tick();const p=[...f.s.polls.values()][0];await f.s.receive(event(p));await f.s.receive(event(p));assert.equal(p.votes.size,1);await f.s.tick();assert(body(p).text.includes('Идут (1)\n1. Елена'));const foreign=event(p,'cancel','b');foreign.message.recipient.chat_id=-1;await f.s.receive(foreign);assert.equal(p.votes.size,1);const stale=event(p,'cancel','c');stale.message.body.mid='old';await f.s.receive(stale);assert.equal(p.votes.size,1);await f.s.receive(event(p,'cancel','d'));assert.equal(p.votes.size,0);f.time('2026-10-19T19:00:00Z');await f.s.receive(event(p,'yes','e'));assert.equal(p.votes.size,0);const restarted=fixture();await restarted.s.tick();await restarted.s.receive(event(p));assert.equal([...restarted.s.polls.values()][0].votes.size,0);});
+test('names, duplicate receipt, cancellation, foreign/stale callback and restart isolation',async()=>{const f=fixture();await f.s.tick();const p=[...f.s.polls.values()][0];await f.s.receive(event(p));await f.s.receive(event(p));assert.equal(p.votes.size,1);await f.s.tick();assert(body(p).text.includes('✅ Записано (1):\n1. Елена'));const foreign=event(p,'cancel','b');foreign.message.recipient.chat_id=-1;await f.s.receive(foreign);assert.equal(p.votes.size,1);const stale=event(p,'cancel','c');stale.message.body.mid='old';await f.s.receive(stale);assert.equal(p.votes.size,1);await f.s.receive(event(p,'cancel','d'));assert.equal(p.votes.size,0);f.time('2026-10-19T19:00:00Z');await f.s.receive(event(p,'yes','e'));assert.equal(p.votes.size,0);const restarted=fixture();await restarted.s.tick();await restarted.s.receive(event(p));assert.equal([...restarted.s.polls.values()][0].votes.size,0);});
 test('uncertain sends never repeat; failed edit and delete retry without replacement',async()=>{const f=fixture();f.api.send=async()=>{f.calls.send.push([]);throw Error();};await f.s.tick();await f.s.tick();assert.equal(f.calls.send.length,1);const g=fixture();await g.s.tick();const p=[...g.s.polls.values()][0];await g.s.receive(event(p));g.api.edit=async()=>{throw Error();};await g.s.tick();assert(p.dirty);g.api.remove=async()=>{throw Error();};g.time('2026-10-19T19:00:00Z');await g.s.tick();assert(p.closed);assert(!p.deleted);g.api.remove=async()=>{};await g.s.tick();assert(p.deleted);assert.equal(g.calls.send.length,1);});
 const env={BOT_MODE:'test',CHAT_IDS:CHAT,TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123'};
 test('configuration needs no state or initializer, denies production and mismatched tokens',()=>{assert.equal(config(env).send,false);for(const patch of [{CHAT_IDS:'-1'},{BOT_MODE:'production'},{BOT_TOKEN:'other'},{TEST_EXPECTED_BOT_ID:''},{WEBHOOK_SECRET:''},{NODE_TLS_REJECT_UNAUTHORIZED:'0'}])assert.throws(()=>config({...env,...patch}));});
@@ -15,4 +15,25 @@ test('memory webhook authenticates and awaits callback before 200 without filesy
  const server=createWebhook({async receive(){await Promise.resolve();received++;}},'secret');const handler=server.listeners('request')[0];
  async function request(secret,body){let status;const req=Readable.from([Buffer.from(body)]);req.method='POST';req.url='/webhook';req.headers={'x-max-bot-api-secret':secret};const res={writeHead(n){status=n;return this;},end(){if(status===200)assert.equal(received,1);}};await handler(req,res);return status;}
  assert.equal(await request('wrong','{}'),403);assert.equal(await request('secret','{'),400);assert.equal(await request('secret','{}'),200);
+});
+
+test('poll layout: empty, join, multiple names, cancel and rejoin keep both buttons',async()=>{
+ const f=fixture();await f.s.tick();const p=[...f.s.polls.values()][0];
+ const header='📅 <b>понедельник, 19 октября</b>\n━━━━━━━━━━━━━━\n📍 Место: <b>Заря</b>\n⏰ Время: <b>20:00 (МСК)</b>\n━━━━━━━━━━━━━━\n';
+ const empty='🤨 Пока никто не записался!';
+ const buttons=body(p).attachments;
+ const check=(message,tail)=>{assert.equal(message.text,header+tail);assert.equal(message.format,'html');assert.deepEqual(message.attachments,buttons);};
+ assert.deepEqual(buttons[0].payload.buttons[0],[{type:'callback',text:'✅ Приду',payload:`poll:${p.id}:yes`},{type:'callback',text:'↩️ Отменить',payload:`poll:${p.id}:cancel`}]);
+ check(f.calls.send[0][1],empty);
+ await f.s.receive(event(p,'yes','join'));await f.s.tick();
+ check(f.calls.edit.at(-1)[1],'✅ Записано (1):\n1. Елена');
+ const second=event(p,'yes','second');second.callback.user={user_id:2,first_name:'Анна <&>',last_name:'Иванова'};
+ await f.s.receive(second);await f.s.tick();
+ check(f.calls.edit.at(-1)[1],'✅ Записано (2):\n1. Елена\n2. Анна &lt;&amp;&gt; Иванова');
+ await f.s.receive(event(p,'cancel','cancel-first'));await f.s.tick();
+ check(f.calls.edit.at(-1)[1],'✅ Записано (1):\n1. Анна &lt;&amp;&gt; Иванова');
+ const cancel=event(p,'cancel','cancel-last');cancel.callback.user.user_id=2;
+ await f.s.receive(cancel);await f.s.tick();check(f.calls.edit.at(-1)[1],empty);
+ await f.s.receive(event(p,'yes','rejoin'));await f.s.tick();check(f.calls.edit.at(-1)[1],'✅ Записано (1):\n1. Елена');
+ assert.equal(f.calls.send.length,1);assert.equal(f.calls.remove.length,0);
 });

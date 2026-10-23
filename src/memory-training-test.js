@@ -52,10 +52,14 @@ function trainingDate(value, now) {
 function body(p) {
   if (!trainingDate(p.date, new Date('2000-01-01T00:00:00Z'))) throw Error('INVALID_TRAINING_DATE');
   const day = new Date(`${p.date}T12:00:00Z`).getUTCDay();
-  const date = new Intl.DateTimeFormat('ru-RU', { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'Europe/Moscow' }).format(new Date(`${p.date}T12:00:00Z`));
+  const date = new Intl.DateTimeFormat('ru-RU', { weekday:'long', day:'numeric', month:'long', timeZone:'Europe/Moscow' }).format(new Date(`${p.date}T12:00:00Z`));
   const place = [0,6].includes(day) ? 'онлайн' : [1,3].includes(day) ? 'Заря' : 'Поле чудес';
   const names = [...p.votes.values()];
-  return { text: `📅 ${date}\n📍 Место: ${place}\n⏰ Время: ${times[day]} (МСК)\n\nИдут (${names.length})\n${names.map((name,i)=>`${i+1}. ${name}`).join('\n') || 'Пока никто не записался.'}`,
+  const escape = name => name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const participants = names.length
+    ? `✅ Записано (${names.length}):\n${names.map((name,i)=>`${i+1}. ${escape(name)}`).join('\n')}`
+    : '🤨 Пока никто не записался!';
+  return { text: `📅 <b>${date}</b>\n━━━━━━━━━━━━━━\n📍 Место: <b>${place}</b>\n⏰ Время: <b>${times[day]} (МСК)</b>\n━━━━━━━━━━━━━━\n${participants}`, format: 'html',
     attachments:[{type:'inline_keyboard',payload:{buttons:[[
       {type:'callback',text:'✅ Приду',payload:`poll:${p.id}:yes`},
       {type:'callback',text:'↩️ Отменить',payload:`poll:${p.id}:cancel`}

@@ -49,17 +49,26 @@ function trainingDate(value, now) {
   }
   return null;
 }
+// Same fixed meeting URL as getTrainingLink() in main's bot.js.
+function getTrainingLink() {
+  return 'https://telemost.yandex.ru/j/35289250295816';
+}
 function body(p) {
   if (!trainingDate(p.date, new Date('2000-01-01T00:00:00Z'))) throw Error('INVALID_TRAINING_DATE');
   const day = new Date(`${p.date}T12:00:00Z`).getUTCDay();
   const date = new Intl.DateTimeFormat('ru-RU', { weekday:'long', day:'numeric', month:'long', timeZone:'Europe/Moscow' }).format(new Date(`${p.date}T12:00:00Z`));
-  const place = [0,6].includes(day) ? 'онлайн' : [1,3].includes(day) ? 'Заря' : 'Поле чудес';
+  const online = day === 0 || day === 6;
+  const place = [1,3].includes(day) ? 'Заря' : 'Поле чудес';
+  const trainingLink = getTrainingLink();
+  const details = online
+    ? `🎥 Платформа: <b>Яндекс Телемост</b>\n⏰  Время: <b>${times[day]}</b>\n\n🔗 Ссылка на подключение: <a href="${trainingLink}">${trainingLink}</a>`
+    : `📍 Место: <b>${place}</b>\n⏰ Время: <b>${times[day]} (МСК)</b>`;
   const names = [...p.votes.values()];
   const escape = name => name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const participants = names.length
     ? `✅ Записано (${names.length}):\n${names.map((name,i)=>`${i+1}. ${escape(name)}`).join('\n')}`
     : '🤨 Пока никто не записался!';
-  return { text: `📅 <b>${date}</b>\n━━━━━━━━━━━━━━\n📍 Место: <b>${place}</b>\n⏰ Время: <b>${times[day]} (МСК)</b>\n━━━━━━━━━━━━━━\n${participants}`, format: 'html',
+  return { text: `📅 <b>${date}</b>\n\n${details}\n\n${participants}`, format: 'html',
     attachments:[{type:'inline_keyboard',payload:{buttons:[[
       {type:'callback',text:'✅ Приду',payload:`poll:${p.id}:yes`},
       {type:'callback',text:'↩️ Отменить',payload:`poll:${p.id}:cancel`}

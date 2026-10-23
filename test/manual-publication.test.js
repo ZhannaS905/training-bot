@@ -19,7 +19,7 @@ test('manual command, duplicate events, new events, restart, names on future pol
  const f=await fixture(t),s=f.service();await Promise.all([s.receive(command()),s.receive(command())]);
  await s.receive(command('/тестопрос 2026-10-24','event2'));
  await s.receive(command('/тестопрос 2026-10-25','event1')); // Same event cannot select another date.
- assert.equal(f.calls.length,1);assert.match(f.calls[0][1].text,/18:00/);assert.match(f.calls[0][1].text,/онлайн/);
+ assert.equal(f.calls.length,1);assert.match(f.calls[0][1].text,/18:00/);assert.match(f.calls[0][1].text,/Платформа: <b>Яндекс Телемост<\/b>/);
  const p=s.polls.get('2026-10-24');await s.receive({update_type:'message_callback',callback:{callback_id:'cb',payload:`poll:${p.id}:yes`,user:{user_id:8,first_name:'Анна'}},message:{recipient:{chat_id:CHAT},body:{mid:p.mid}}});
  assert.equal(p.votes.get(8),'Анна');
  // Restart intentionally loses reservations and ignores old poll callbacks.

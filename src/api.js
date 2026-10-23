@@ -15,8 +15,11 @@ class MaxApi {
     if (result.success === false) throw new Error('MAX rejected request');
     return result;
   }
-  async send(chat, body) {
-    const result = await this.request('POST', '/messages', { chat_id: chat }, body);
+  async send(chat, body, { disableLinkPreview = false } = {}) {
+    // MAX documents this query parameter for POST /messages only.
+    const query = { chat_id: chat };
+    if (disableLinkPreview) query.disable_link_preview = true;
+    const result = await this.request('POST', '/messages', query, body);
     const mid = result.message?.body?.mid;
     if (typeof mid !== 'string' || !mid) throw new Error('MAX missing message ID');
     return mid;

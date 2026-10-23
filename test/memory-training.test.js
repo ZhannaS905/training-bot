@@ -43,10 +43,12 @@ test('weekend polls use the production meeting link, dynamic dates and time, and
  const link='https://telemost.yandex.ru/j/35289250295816';
  for(const [date,label] of [['2026-10-24','суббота, 24 октября'],['2026-10-25','воскресенье, 25 октября'],['2026-11-01','воскресенье, 1 ноября']]) {
   const f=fixture();f.time(`${date}T07:00:00Z`);await f.s.tick();const p=f.s.polls.get(date);
-  const header=`📅 <b>${label}</b>\n\n🎥 Платформа: <b>Яндекс Телемост</b>\n⏰  Время: <b>18:00</b>\n\n🔗 Ссылка на подключение: <a href="${link}">${link}</a>\n\n`;
+  const header=`📅 <b>${label}</b>\n\n🎥 Платформа: <b>Яндекс Телемост</b>\n⏰  Время: <b>18:00</b>\n\n🔗 <a href="${link}">Ссылка для подключения</a>\n\n`;
   const buttons=body(p).attachments;
-  const check=tail=>{const b=body(p);assert.equal(b.text,header+tail);assert.equal(b.format,'html');assert.deepEqual(b.attachments,buttons);assert.doesNotMatch(b.text,/Место:|онлайн|[━─]/);};
+  const check=tail=>{const b=body(p);assert.equal(b.text,header+tail);assert.equal(b.format,'html');assert.deepEqual(b.attachments,buttons);assert.doesNotMatch(b.text,/Место:|онлайн|[━─]|Подключиться к тренировке|Ссылка (?:для подключения|на подключение):/);assert.equal(b.text.split('Ссылка для подключения').length-1,1);assert.equal(b.text.replace(/<[^>]*>/g,'' ).includes(link),false);assert.deepEqual(b.attachments.map(a=>a.type),['inline_keyboard']);};
   check('🤨 Пока никто не записался!');
+  assert.deepEqual(f.calls.send[0][1],body(p));
+  assert.deepEqual(f.calls.send[0][2],{disableLinkPreview:true});
   await f.s.receive(event(p,'yes','join'));await f.s.tick();check('✅ Записано (1):\n1. Елена');
   assert.equal(f.calls.edit.at(-1)[1].text,body(p).text);
   await f.s.receive(event(p,'cancel','cancel'));await f.s.tick();check('🤨 Пока никто не записался!');

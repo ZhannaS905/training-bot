@@ -28,9 +28,9 @@ async function guardedApi(c, fetchImpl) {
   const owned = new Set();
   const requireOwned = mid => { if (!owned.has(mid)) throw Error('MESSAGE_REFUSED'); };
   return {
-    async send(chatId, body) {
+    async send(chatId, body, options) {
       if (!c.send || chatId !== CHAT) throw Error('SEND_REFUSED');
-      const mid = await raw.send(CHAT, body); owned.add(mid); return mid;
+      const mid = await raw.send(CHAT, body, options); owned.add(mid); return mid;
     },
     async edit(mid, body) { requireOwned(mid); if (!c.edit) throw Error('EDIT_REFUSED'); return raw.edit(mid, body); },
     async remove(mid) { requireOwned(mid); if (!c.remove) throw Error('DELETE_REFUSED');
@@ -53,15 +53,16 @@ function trainingDate(value, now) {
 function getTrainingLink() {
   return 'https://telemost.yandex.ru/j/35289250295816';
 }
+function isOnline(date) { return [0, 6].includes(new Date(`${date}T12:00:00Z`).getUTCDay()); }
 function body(p) {
   if (!trainingDate(p.date, new Date('2000-01-01T00:00:00Z'))) throw Error('INVALID_TRAINING_DATE');
   const day = new Date(`${p.date}T12:00:00Z`).getUTCDay();
   const date = new Intl.DateTimeFormat('ru-RU', { weekday:'long', day:'numeric', month:'long', timeZone:'Europe/Moscow' }).format(new Date(`${p.date}T12:00:00Z`));
-  const online = day === 0 || day === 6;
+  const online = isOnline(p.date);
   const place = [1,3].includes(day) ? 'Заря' : 'Поле чудес';
   const trainingLink = getTrainingLink();
   const details = online
-    ? `🎥 Платформа: <b>Яндекс Телемост</b>\n⏰  Время: <b>${times[day]}</b>\n\n🔗 Ссылка на подключение: <a href="${trainingLink}">${trainingLink}</a>`
+    ? `🎥 Платформа: <b>Яндекс Телемост</b>\n⏰  Время: <b>${times[day]}</b>\n\n🔗 <a href="${trainingLink}">Ссылка для подключения</a>`
     : `📍 Место: <b>${place}</b>\n⏰ Время: <b>${times[day]} (МСК)</b>`;
   const names = [...p.votes.values()];
   const escape = name => name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -82,7 +83,7 @@ class MemoryTrainingTest {
     if (!await this.attempts.reserve(date, eventId)) return;
     const p={id:randomUUID(),date,votes:new Map(),mid:null,closed:false};
     this.polls.set(date,p);
-    try { p.mid=await this.api.send(CHAT,body(p)); } catch { p.uncertain=true; }
+    try { p.mid=await this.api.send(CHAT,body(p), isOnline(date) ? { disableLinkPreview: true } : undefined); } catch { p.uncertain=true; }
   }
   tick() { return this.run(async()=>{
     const t=moscow(this.now());

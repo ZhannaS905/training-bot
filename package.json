@@ -6,8 +6,8 @@
   "main": "bot.js",
   "scripts": {
     "start": "node --env-file=.env bot.js",
-    "test": "node --test",
-    "check": "node --check bot.js && node --test",
+    "test": "node --test test/*.test.js",
+    "check": "node --check bot.js && node --test test/*.test.js",
     "start:memory:test": "node memory-training-test.cjs",
     "start:bothost:test": "node bothost-test.cjs"
   },

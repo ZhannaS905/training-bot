@@ -4,7 +4,7 @@ const { config, guardedApi, MemoryTrainingTest } = require('./src/memory-trainin
 async function main() {
   const c=config(process.env), api=await guardedApi(c), service=new MemoryTrainingTest(api,c);
   // The shared HTTP handler expects synchronous receipt. Handle the authenticated
-  // callback fully before acknowledgment, with serialized, memory-only updates.
+  // update fully before acknowledgment; only publication attempts are persisted.
   const handler=createWebhook(service,c.secret).listeners('request')[0];
   const server=http.createServer((req,res)=> {
     if(req.method==='GET' && req.url==='/health') return res.writeHead(200).end('{"ready":true,"mode":"test-memory"}');

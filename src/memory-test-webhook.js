@@ -16,7 +16,7 @@ function createWebhook(service, secret) {
       let update;
       try { update = JSON.parse(Buffer.concat(chunks).toString()); }
       catch { res.writeHead(400).end(); return; }
-      // Serialize the in-memory callback before acknowledging; no remote API writes here.
+      // Await serialized handling, including durable reservation for manual publication.
       await service.receive(update);
       res.writeHead(200).end();
     } catch { res.writeHead(503).end(); }

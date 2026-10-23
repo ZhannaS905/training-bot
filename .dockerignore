@@ -11,3 +11,5 @@
 !src/memory-training-test.js
 !certs/
 !certs/russian-trusted-root-ca.pem
+
+!src/test-publication-attempts.js

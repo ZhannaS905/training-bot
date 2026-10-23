@@ -12,7 +12,7 @@ async function main() {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve);});
   const tick=()=>void service.tick().catch(()=>console.error('Training Test: scheduler error'));
-  const timer=setInterval(tick,15000); tick();
+  const timer=setInterval(tick,1000); tick();
   const stop=()=>{clearInterval(timer);server.close();server.closeIdleConnections?.();};
   process.once('SIGINT',stop);process.once('SIGTERM',stop);
   console.log('Training Test: verified test identity/chat; memory storage ready.');

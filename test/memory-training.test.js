@@ -62,3 +62,33 @@ test('all in-person training days have place and time without separators or onli
   assert.doesNotMatch(b.text,/Платформа|Ссылка|telemost|[━─]/);
  }
 });
+
+
+test('failed edits log only a fixed safe message and retry through the queue',async(t)=>{
+ const logs=[];t.mock.method(console,'error',(...args)=>logs.push(args));
+ const f=fixture();await f.s.tick();const p=[...f.s.polls.values()][0];
+ await f.s.receive(event(p));
+ f.api.edit=async()=>{throw Error('token=secret user=Елена message_id=private');};
+ await f.s.tick();assert.equal(p.dirty,true);
+ assert.deepEqual(logs,[['Training Test: PUT /messages failed; edit will retry.']]);
+ let finish;let edits=0;
+ f.api.edit=async()=>{edits++;await new Promise(resolve=>{finish=resolve;});};
+ const first=f.s.tick();const second=f.s.tick();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(edits,1);assert.equal(p.dirty,true);
+ finish();await Promise.all([first,second]);
+ assert.equal(p.dirty,false);assert.equal(edits,1);assert.equal(f.calls.send.length,1);
+});
+
+test('Training Test entrypoint schedules ticks every 1000 ms',async()=>{
+ const vm=require('node:vm');const fs=require('node:fs');let interval;let ticks=0;
+ const server={once(){},listen(port,host,resolve){resolve();}};
+ const context={require(name){
+  if(name==='node:http')return {createServer:()=>server};
+  if(name==='./src/memory-test-webhook')return {createWebhook:()=>({listeners:()=>[()=>{}]})};
+  if(name==='./src/memory-training-test')return {config:()=>({}),guardedApi:async()=>({}),MemoryTrainingTest:class{async tick(){ticks++;}}};
+  throw Error('Unexpected dependency');
+ },module:{exports:{}},process:{env:{},once(){}},console:{log(){},error(){}},setInterval(fn,ms){interval={fn,ms};return 1;},clearInterval(){}};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../memory-training-test.cjs'),'utf8'),context);
+ await context.module.exports.main();assert.equal(interval.ms,1000);assert.equal(ticks,1);
+ interval.fn();assert.equal(ticks,2);
+});

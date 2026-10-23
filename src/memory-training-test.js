@@ -97,7 +97,7 @@ class MemoryTrainingTest {
       await this.publish(t.date, `automatic:${t.date}`);
     }
     for (const p of this.polls.values()) if (p.dirty && !p.closed) {
-      try { await this.api.edit(p.mid,body(p)); p.dirty=false; } catch { /* Retry edit only. */ }
+      try { await this.api.edit(p.mid,body(p)); p.dirty=false; } catch { console.error('Training Test: PUT /messages failed; edit will retry.'); }
     }
   }); }
   receive(u) { return this.run(async()=>{

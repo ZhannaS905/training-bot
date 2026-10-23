@@ -14,7 +14,7 @@ function config(env) {
   const flag = key => { if (env[key] && !['true','false'].includes(env[key])) throw Error('TEST_CONFIG'); return env[key] === 'true'; };
   const admins = (env.TEST_ADMIN_IDS || '').split(',').map(x => x.trim());
   if (env.TEST_ADMIN_IDS && admins.some(x => !/^[1-9]\d*$/.test(x))) throw Error('TEST_ADMIN_IDS_INVALID');
-  return { admins: admins.filter(Boolean), attemptDirectory: env.TEST_ATTEMPT_DIR, token, expectedId: env.TEST_EXPECTED_BOT_ID, secret: env.WEBHOOK_SECRET,
+  return { admins: admins.filter(Boolean), token, expectedId: env.TEST_EXPECTED_BOT_ID, secret: env.WEBHOOK_SECRET,
     send: flag('TEST_ALLOW_SEND'), edit: flag('TEST_ALLOW_EDIT'), remove: flag('TEST_ALLOW_DELETE'), auto: flag('AUTO_PUBLISH') };
 }
 async function guardedApi(c, fetchImpl) {
@@ -62,7 +62,7 @@ function body(p) {
     ]]}}] };
 }
 class MemoryTrainingTest {
-  constructor(api, c, now = () => new Date(), attempts = new TestPublicationAttempts(c.attemptDirectory, c.expectedId)) { this.attempts=attempts; this.api=api; this.c=c; this.now=now; this.polls=new Map(); this.done=new Set(); this.queue=Promise.resolve(); }
+  constructor(api, c, now = () => new Date(), attempts = new TestPublicationAttempts()) { this.attempts=attempts; this.api=api; this.c=c; this.now=now; this.polls=new Map(); this.done=new Set(); this.queue=Promise.resolve(); }
   run(job) { const next=this.queue.then(job); this.queue=next.catch(()=>{}); return next; }
   async publish(date, eventId) {
     if (!this.c.send || this.polls.has(date)) return;

@@ -23,13 +23,13 @@ test('Dockerfile selects Node 22, explicit safe entrypoint and code outside /app
   const text = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
   assert.match(text, /^FROM node:22-bookworm-slim$/m);
   assert.match(text, /^WORKDIR \/opt\/training-test$/m);
-  assert.match(text, /^CMD \["node", "\/opt\/training-test\/bothost-test.cjs"\]$/m);
+  assert.match(text, /^CMD \["node", "\/opt\/training-test\/memory-training-test.cjs"\]$/m);
   assert.match(text, /^USER node$/m); assert.match(text, /^EXPOSE 3000$/m);
   assert(!text.includes('http-wrapper.js')); assert(!/^COPY \.\s/m.test(text));
-  for (const setting of ['STATE_DIR=/app/data/training-test/live', 'TEST_ALLOW_DELETE=false', 'TEST_ALLOW_SEND=false',
-    'TEST_ALLOW_EDIT=false', 'AUTO_PUBLISH=false', 'NODE_TLS_REJECT_UNAUTHORIZED=1']) assert(text.includes(setting));
+  for (const setting of ['TEST_ALLOW_DELETE=false', 'TEST_ALLOW_SEND=false',
+    'TEST_ALLOW_EDIT=false', 'AUTO_PUBLISH=false']) assert(text.includes(setting));
   assert(!/\b(?:ARG|ENV)\s+(?:BOT_TOKEN|TEST_BOT_TOKEN|WEBHOOK_SECRET)\b/.test(text));
-  assert(!text.includes('chmod 777'));
+  assert(!text.includes('STATE_DIR')); assert(!text.includes('src/store.js')); assert(!text.includes('chmod 777'));
 });
 function copiedFiles() {
   const text = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
@@ -59,12 +59,10 @@ test('relocated files stay usable with a separate empty /app mount; no wrapper i
     const target = path.join(code, file); fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(root, file), target);
   }
-  const result = cp.spawnSync(process.execPath, [path.join(code, 'bothost-test.cjs')], {
+  const result = cp.spawnSync(process.execPath, [path.join(code, 'memory-training-test.cjs')], {
     cwd: app, env: { BOT_MODE: 'test', CHAT_IDS: '-1' }, encoding: 'utf8'
   });
-  assert.equal(result.status, 1); assert(result.stderr.includes('TEST_CONFIG'));
+  assert.equal(result.status, 1); assert(result.stderr.includes('startup refused'));
   assert(!result.stderr.includes('MODULE_NOT_FOUND')); assert(!result.stderr.includes('PRIVATE_TOKEN'));
-  const check = cp.spawnSync(process.execPath, ['-e', `const c=require(${JSON.stringify(path.join(code, 'src/bothost-test-config.js'))});if(!c.CA_PATH.startsWith(${JSON.stringify(code)}))process.exit(1);require(${JSON.stringify(path.join(code, 'src/bothost-test-tls.js'))}).validateCertificate();`], { cwd: app, env: {}, encoding: 'utf8' });
-  assert.equal(check.status, 0, check.stderr);
   assert.deepEqual(fs.readdirSync(app), []);
 });

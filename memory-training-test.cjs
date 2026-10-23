@@ -24,6 +24,7 @@ function diagnosticReceiver(service, log = console.log) {
   }};
 }
 async function main() {
+  if (process.env.FITPP_BRIDGE_ENABLED === 'true') return require('./src/fitpp-test-bridge').main();
   const c=config(process.env), api=await guardedApi(c), service=new MemoryTrainingTest(api,c);
   // The shared HTTP handler expects synchronous receipt. Handle the authenticated
   // update fully before acknowledgment; all state stays in process memory.

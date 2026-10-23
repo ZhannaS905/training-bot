@@ -13,3 +13,5 @@
 !certs/russian-trusted-root-ca.pem
 
 !src/test-publication-attempts.js
+
+!src/fitpp-test-bridge.js

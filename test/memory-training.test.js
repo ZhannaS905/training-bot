@@ -84,6 +84,7 @@ test('Training Test entrypoint schedules ticks every 1000 ms',async()=>{
  const server={once(){},listen(port,host,resolve){resolve();}};
  const context={require(name){
   if(name==='node:http')return {createServer:()=>server};
+  if(name==='node:crypto')return require('node:crypto');
   if(name==='./src/memory-test-webhook')return {createWebhook:()=>({listeners:()=>[()=>{}]})};
   if(name==='./src/memory-training-test')return {config:()=>({}),guardedApi:async()=>({}),MemoryTrainingTest:class{async tick(){ticks++;}}};
   throw Error('Unexpected dependency');

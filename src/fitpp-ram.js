@@ -19,11 +19,12 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
  function display(receivedAt){
   const job=displayTail.then(async()=>{
    if(!base)return;
-   const projected=render(view(),scope);
-   const waiting=Array.from(pending.values()).some(p=>p.fast);
-   const text=waiting?projected.replace('✅ Записано','⏳ Предварительный список')+'\n\n⏳ Изменение ещё не подтверждено FitPP.':projected;
+   // Render the intent immediately with the final layout. Confirmation alone
+   // must not change the text and cause another MAX PUT.
+   const text=render(view(),scope);
+   const started=clock();
    const result=await api.syncPollText(text,{clock});
-   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null});
+   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null,displayQueueMs:Math.round(started-receivedAt),maxVerifyMs:result.maxVerifyMs??null,maxPutMs:result.maxPutMs??null});
   });
   displayTail=job.catch(()=>{});return job;
  }
@@ -53,9 +54,9 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
   // No Firebase operation is awaited before scheduling the first guarded MAX PUT.
   const shown=fast?display(receivedAt):Promise.resolve();
   const saved=writeTail.then(async()=>{
-   // Finish the immediate MAX attempt before starting persistence. A failed MAX
-   // attempt must not lose the action; authoritative reconciliation repairs it.
-   await shown.catch(()=>{});return commit();
+   // Persistence and the immediate MAX attempt overlap. Durable writes keep
+   // their own order; settlement below waits for MAX before any correction.
+   return commit();
   });writeTail=saved.catch(()=>{});
   const job=(async()=>{
    const [write]=await Promise.allSettled([saved,shown]);

@@ -67,3 +67,26 @@ For a warm verified binding, RAM schedules the existing scoped MAX edit immediat
 `integration/fitpp-mediator/request-diagnostic.cjs` and `pilot-server.diagnostic.diff` prepare allowlisted rejection logging for the separate local mediator. They are not automatically installed or restarted by the bot deployment. Copy the helper to the mediator's `src/` and review/apply the diff against its current source when a separate mediator update is authorized. Only fixed codes/route labels are logged, never arbitrary errors or payloads. The old handler did not retain rejection reasons, so past HTTP 403 responses cannot be reliably attributed from its existing logs.
 
 Live check after explicit deployment approval: use only Training Test and this branch; keep the existing 26 October 20:00 Zarya poll (`mid.ffffb6ed054c9f4801a169a000563611`, UUID `99732d34-b609-4266-9418-f12de9b3fe62`). Wait for `pollDisplayReady:true`, press Yes then Cancel, and verify immediate name addition/removal followed by removal of the pending marker and matching test FitPP bookings. No live write or deployment is part of the local test suite.
+
+
+## Optimistic RAM display without confirmation-only PUT
+
+The exact-poll bridge renders the pending RAM projection with the final participant
+layout, without the preliminary-list heading or FitPP confirmation footer. A
+successful confirmation with the same participants produces no second PUT:
+`syncPollText` compares the freshly verified MAX message to the authoritative
+render. A changed authoritative list or failed save still triggers correction.
+
+Persistence starts independently of the first MAX request, retaining the durable
+write queue. Settlement waits for that request before rollback/reconciliation, so
+PUTs remain serialized. Duplicate callback IDs share the in-flight promise; HTTP
+success still waits for persistence and reconciliation. Names still come only
+from the confirmed FitPP binding. Cold/missing bindings use the confirmed path.
+
+`fitpp_ram_first_put.firstPutMs` measures completion, including the guarded GET
+and PUT. `displayQueueMs`, `maxVerifyMs` and `maxPutMs` separate local queue delay,
+MAX verification and MAX editing. The guarded GET is retained to validate the
+exact chat, sender, MID and buttons before each potential edit. Actual MAX latency
+requires a later permitted runtime observation; local tests use mocks only.
+
+No BotHost rebuild, deployment or poll publication is part of this change.

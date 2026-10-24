@@ -18,8 +18,8 @@ function fixture(initial=[]){
 test('warm first PUT precedes blocked Firebase and has zero additional reads; cancel and second participant survive',async()=>{
  const f=fixture([other]),c=f.make();await c.refresh();const before=f.reads(),gate=deferred(),e=f.e();
  const job=c.run(e,()=>gate.promise.then(()=>f.commit(e)));await tick();await tick();
- assert.equal(f.reads(),before);assert.match(f.text(),/Confirmed/);assert.match(f.text(),/Other/);assert.match(f.text(),/Предварительный список/);assert.match(f.text(),/ещё не подтверждено/);assert.doesNotMatch(f.text(),/✅ Записано/);
- gate.resolve();await job;const cancel=f.e('cancel',100001);await c.run(cancel,()=>f.commit(cancel));assert.doesNotMatch(f.text(),/Confirmed/);assert.match(f.text(),/Other/);assert.equal(f.peak(),1);
+ assert.equal(f.reads(),before);assert.match(f.text(),/Confirmed/);assert.match(f.text(),/Other/);assert.doesNotMatch(f.text(),/Предварительный список|ещё не подтверждено/);assert.match(f.text(),/✅ Записано \(2\)/);
+ const puts=f.puts.length;gate.resolve();await job;assert.equal(f.puts.length,puts);const cancel=f.e('cancel',100001),beforeCancel=f.puts.length;await c.run(cancel,()=>f.commit(cancel));assert.equal(f.puts.length,beforeCancel+1);assert.doesNotMatch(f.text(),/Confirmed/);assert.match(f.text(),/Other/);assert.equal(f.peak(),1);
 });
 test('rapid yes/cancel renders cancel before first save settles; duplicate shares durable work',async()=>{
  const f=fixture(),c=f.make();await c.refresh();const gate=deferred(),yes=f.e(),cancel=f.e('cancel',100001);let writes=0;
@@ -68,11 +68,11 @@ test('missing confirmed binding never displays MAX profile data before durable s
  await c.refresh();const e=f.e();e.callback.user.first_name='Untrusted profile';const job=c.run(e,()=>gate.promise.then(()=>f.commit(e)));await tick();assert.equal(reads,1);assert.doesNotMatch(text,/Confirmed|Untrusted/);gate.resolve();await job;assert.match(text,/Confirmed/);assert.doesNotMatch(text,/Untrusted/);
 });
 
-test('MAX completes before persistence starts and success removes pending marker',async()=>{
+test('persistence starts while MAX is blocked; settlement keeps PUTs ordered',async()=>{
  const f=fixture(),max=deferred();let writes=0,block=false,text='';
  const c=createRam({scope,now:()=>100000,loadView:async()=>f.view(),api:{syncPollText:async value=>{text=value;if(block)await max.promise;return {edited:true}}}});
  await c.refresh();block=true;const e=f.e();const job=c.run(e,()=>{writes++;return f.commit(e)});
- await tick();assert.match(text,/Confirmed/);assert.match(text,/ещё не подтверждено/);assert.equal(writes,0);
+ await tick();assert.match(text,/Confirmed/);assert.doesNotMatch(text,/ещё не подтверждено/);assert.equal(writes,1);
  max.resolve();await job;assert.equal(writes,1);assert.doesNotMatch(text,/ещё не подтверждено/);assert.match(text,/✅ Записано/);
 });
 test('failed save and unavailable repair roll back to known participants and allow durable retry',async()=>{
@@ -86,4 +86,23 @@ test('older rejected yes cannot overwrite newer pending cancel or other particip
  const a=c.run(f.e('cancel'),()=>gate.promise);await tick();await tick();
  const e=f.e('yes',100001),b=c.run(e,()=>f.commit(e));await tick();await tick();assert.match(f.text(),/Confirmed/);
  gate.reject(Error('rejected'));await assert.rejects(a);await b;assert.match(f.text(),/Confirmed/);assert.match(f.text(),/Other/);assert.doesNotMatch(f.text(),/ещё не подтверждено/);
+});
+
+test('Firebase failure during blocked optimistic PUT waits before rollback and leaves webhook retryable',async()=>{
+ const f=fixture([other]),max=deferred();let block=false,text='',active=0,peak=0,calls=0;
+ const c=createRam({scope,now:()=>100000,loadView:async()=>f.view(),api:{syncPollText:async value=>{
+  active++;peak=Math.max(peak,active);calls++;
+  try{if(block){block=false;await max.promise}text=value;return {edited:true}}finally{active--}
+ }}});
+ await c.refresh();block=true;let started=false,settled=false;
+ const job=c.run(f.e(),async()=>{started=true;throw Error('Firebase offline')});
+ const outcome=assert.rejects(job,/Firebase offline/).then(()=>{settled=true});
+ await tick();assert.equal(started,true);assert.equal(settled,false);assert.equal(calls,2);
+ max.resolve();await outcome;assert.equal(peak,1);assert.doesNotMatch(text,/Confirmed|Предварительный|не подтверждено/);assert.match(text,/Other/);
+});
+test('callback timestamp controls both optimistic projection and durable confirmation ordering',async()=>{
+ const f=fixture(),c=f.make();await c.refresh();const e=f.e();e.callback.timestamp=100001;
+ // Conflicting envelope timestamps must disable optimism rather than show an empty preview.
+ const gate=deferred(),count=f.puts.length,job=c.run(e,()=>gate.promise);
+ await tick();assert.equal(f.puts.length,count);gate.resolve({applied:false});await job;
 });

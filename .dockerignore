@@ -17,3 +17,5 @@
 !src/fitpp-test-bridge.js
 
 !src/fitpp-poll-sync.js
+
+!src/fitpp-optimistic.js

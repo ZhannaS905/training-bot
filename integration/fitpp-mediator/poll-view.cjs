@@ -1,7 +1,8 @@
 'use strict';
 const {MAIN,BOOKINGS,bookingKey}=require('./service.cjs');
+const {optimisticContext}=require('./optimistic-context.cjs');
 const {POLL,assertPoll}=require('./pilot-policy.cjs');
-async function readPollView(db,scope){
+async function readPollView(db,scope,{optimistic=false}={}){
 assertPoll(scope);
 return db.runTransaction(async tx=>{
  const [main,bookings,clock]=await Promise.all([tx.get(db.doc(MAIN)),tx.get(db.doc(BOOKINGS)),tx.get(db.doc('fitppTestWorkspaces/synthetic-v1/states/bookingClock'))]);
@@ -16,7 +17,7 @@ return db.runTransaction(async tx=>{
   participants.push({clientId:client.id,name});
  }
  participants.sort((a,b)=>a.clientId.localeCompare(b.clientId));
- return {chat:POLL.chat,mid:POLL.mid,uuid:POLL.uuid,date:POLL.date,location:POLL.location,time:POLL.time,revision:c.revision,participants};
+ return {chat:POLL.chat,mid:POLL.mid,uuid:POLL.uuid,date:POLL.date,location:POLL.location,time:POLL.time,revision:c.revision,participants,...(optimistic?{optimistic:await optimisticContext(tx,db,m,b,scope)}:{})};
 });
 }
 module.exports={readPollView};

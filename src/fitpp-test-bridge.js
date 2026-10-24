@@ -4,6 +4,7 @@ const {createHmac}=require('node:crypto');
 const {createWebhook}=require('./memory-test-webhook');
 const {config,guardedApi}=require('./memory-training-test');
 const {createPollSync}=require('./fitpp-poll-sync');
+const {createOptimistic}=require('./fitpp-optimistic');
 function settings(env){
  if(env.BOT_MODE!=='test'||env.FITPP_BRIDGE_ENABLED!=='true')throw Error('TEST_BRIDGE_DISABLED');
  if(['AUTO_PUBLISH','TEST_ALLOW_SEND','TEST_ALLOW_EDIT','TEST_ALLOW_DELETE'].some(k=>env[k]!=='false'))throw Error('POLL_WRITES_MUST_BE_DISABLED');
@@ -20,7 +21,7 @@ async function signedPost(s,path,payload,{transport=fetch,now=Date.now}={}){
  const r=await transport(target.href,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json','x-time':time,'x-signature':signature},body,signal:AbortSignal.timeout(20000)});
  if(!r.ok)throw Error('FITPP_BRIDGE_REJECTED');return r.json();
 }
-function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,clock=()=>performance.now()}={}){
+function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,optimistic,clock=()=>performance.now()}={}){
  return {async receive(u,receivedAt=clock()){
  const p=s.scope;
  if(u?.update_type!=='message_callback'||String(u.message?.recipient?.chat_id)!==p.chat||u.message?.recipient?.chat_type!=='chat'||u.message?.body?.mid!==p.mid||String(u.callback?.user?.user_id)!==String(p.user)||u.callback?.user?.is_bot!==false||!['poll:'+p.uuid+':yes','poll:'+p.uuid+':cancel'].includes(u.callback.payload))return;
@@ -28,11 +29,12 @@ function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,clock=()=
  const at=u.callback.timestamp??u.timestamp;if(!Number.isSafeInteger(at)||Math.abs(now()-at)>86400000||at>now()+30000)throw Error('EVENT_TIME_REJECTED');
  const event={update_type:'message_callback',timestamp:u.timestamp,callback:{callback_id:u.callback.callback_id,user:{user_id:Number(p.user),is_bot:false},payload:u.callback.payload,...(u.callback.timestamp===undefined?{}:{timestamp:u.callback.timestamp})},message:{recipient:{chat_type:'chat',chat_id:p.chat},body:{mid:p.mid}}};
  const started=clock();
- const d=await signedPost(s,'/bot/update',event,{transport,now});
- const committed=clock();
+ let committed,commitStarted;const commit=async()=>{commitStarted=clock();const result=await signedPost(s,'/bot/update',event,{transport,now});committed=clock();return result};
+ const d=optimistic?await optimistic.run(event,commit,receivedAt):await commit();
+
  // Never render from d.booked: a duplicate may refer to an older revision.
- if(sync)await sync();
- log(JSON.stringify({event:'fitpp_test_booking',applied:d.applied===true,duplicate:d.duplicate===true,booked:d.booked===true,queueWaitMs:Math.round(started-receivedAt),bridgeUpdateMs:Math.round(committed-started),syncMs:Math.round(clock()-committed),totalMs:Math.round(clock()-receivedAt)}));
+ if(sync&&!optimistic)await sync();
+ log(JSON.stringify({event:'fitpp_test_booking',applied:d.applied===true,duplicate:d.duplicate===true,booked:d.booked===true,queueWaitMs:Math.round(started-receivedAt),bridgeUpdateMs:Math.round(committed-commitStarted),syncMs:Math.round(clock()-committed),totalMs:Math.round(clock()-receivedAt)}));
  }};
 }
 // One queue covers callback writes and projection reads; timer ticks never build a backlog.
@@ -47,7 +49,8 @@ async function main(){
  const s=settings(process.env),c=config(process.env),api=await guardedApi(c,undefined,s.pollSync?{pollScope:s.scope}:{});
  const synchronizer=s.pollSync?createPollSync({scope:s.scope,api,log:entry=>console.log(JSON.stringify(entry)),loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid})}):null;
  const loop=startReconciliation(synchronizer?()=>synchronizer.sync():null,{onError:()=>console.error('Training Test: poll display sync pending; automatic retry.')});
- const callbacks=receiver(s,{sync:synchronizer?()=>synchronizer.sync({diagnostic:true}):undefined});
+ const optimistic=synchronizer?createOptimistic({scope:s.scope,api,loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),reconcile:options=>synchronizer.sync({...options,diagnostic:true}),log:entry=>console.log(JSON.stringify(entry))}):null;
+ const callbacks=receiver(s,{optimistic,sync:synchronizer?()=>synchronizer.sync({diagnostic:true}):undefined});
  const handler=createWebhook({receive:u=>{const receivedAt=performance.now();return loop.run(()=>callbacks.receive(u,receivedAt))}},c.secret).listeners('request')[0];
  const server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)});

@@ -40,14 +40,14 @@ function startReconciliation(sync,{schedule=setInterval,cancel=clearInterval,onE
  let tail=Promise.resolve(),pending=0,stopped=false;
  const run=job=>{pending++;const next=tail.then(job);tail=next.catch(()=>{}).finally(()=>{pending--});return next};
  const retry=()=>{if(!stopped&&sync&&pending===0)void run(sync).catch(onError)};
- const timer=sync?schedule(retry,1000):null;if(sync)retry();
+ const timer=sync?schedule(retry,30000):null;if(sync)retry();
  return {run,stop(){stopped=true;if(timer!==null)cancel(timer)}};
 }
 async function main(){
  const s=settings(process.env),c=config(process.env),api=await guardedApi(c,undefined,s.pollSync?{pollScope:s.scope}:{});
  const synchronizer=s.pollSync?createPollSync({scope:s.scope,api,log:entry=>console.log(JSON.stringify(entry)),loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid})}):null;
  const loop=startReconciliation(synchronizer?()=>synchronizer.sync():null,{onError:()=>console.error('Training Test: poll display sync pending; automatic retry.')});
- const callbacks=receiver(s,{sync:synchronizer?()=>synchronizer.sync():undefined});
+ const callbacks=receiver(s,{sync:synchronizer?()=>synchronizer.sync({diagnostic:true}):undefined});
  const handler=createWebhook({receive:u=>{const receivedAt=performance.now();return loop.run(()=>callbacks.receive(u,receivedAt))}},c.secret).listeners('request')[0];
  const server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)});

@@ -36,16 +36,22 @@ async function guardedApi(c, fetchImpl, { pollScope } = {}) {
     if (keyboards.length !== 1 || buttons.length !== 2 || buttons.some(b => b.type !== 'callback') || !expected.every(p => buttons.filter(b => b.payload === p).length === 1)) throw Error('POLL_BUTTONS_REFUSED');
     return message;
   }
+  async function checkedPollEdit(text,{skipUnchanged=false,clock=()=>performance.now()}={}) {
+    if (!pollScope || typeof text !== 'string' || !text || text.length > 4000) throw Error('POLL_TEXT_REFUSED');
+    const started=clock(),message=await pollMessage(),verified=clock();
+    // Comparison and PUT share the same freshly verified response; no second GET.
+    const plain=text.replace(/<[^>]*>/g,'').replace(/&(amp|lt|gt|quot|#39);/g,(_,x)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[x]));
+    if(skipUnchanged&&(message.body.text===text||message.body.text===plain))return {edited:false,maxVerifyMs:verified-started,maxPutMs:0};
+    // Omitted attachments preserve the existing keyboard exactly.
+    await raw.edit(pollScope.mid,{text,format:'html',notify:false});
+    return {edited:true,maxVerifyMs:verified-started,maxPutMs:clock()-verified};
+  }
   const owned = new Set();
   const requireOwned = mid => { if (!owned.has(mid)) throw Error('MESSAGE_REFUSED'); };
   return {
     pollMessage,
-    async editPollText(text) {
-      if (!pollScope || typeof text !== 'string' || !text || text.length > 4000) throw Error('POLL_TEXT_REFUSED');
-      await pollMessage();
-      // Omitted attachments preserve the existing keyboard exactly.
-      return raw.edit(pollScope.mid, { text, format: 'html', notify: false });
-    },
+    editPollText: text => checkedPollEdit(text),
+    syncPollText: (text,options) => checkedPollEdit(text,{...options,skipUnchanged:true}),
     async send(chatId, body, options) {
       if (!c.send || chatId !== CHAT) throw Error('SEND_REFUSED');
       const mid = await raw.send(CHAT, body, options); owned.add(mid); return mid;

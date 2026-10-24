@@ -8,18 +8,22 @@ function validateView(view,scope){
 function render(view,scope){validateView(view,scope);return body({id:scope.uuid,date:view.date,votes:new Map(view.participants.map(p=>[p.clientId,p.name]))}).text.replace('🤨 Пока никто не записался!','✅ Записано (0):\nПока никто не записался.')}
 function plainText(html){return html.replace(/<[^>]*>/g,'').replace(/&(amp|lt|gt|quot|#39);/g,(_,x)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[x]))}
 function createPollSync({scope,loadView,api,clock=()=>performance.now(),log=()=>{}}){
- let flight=null,again=false;
- async function once(){const started=clock(),timing={event:'fitpp_poll_sync',pollViewMs:0,maxReadMs:0,maxEditMs:0,puts:0};
- async function timed(key,job){const at=clock();try{return await job()}finally{timing[key]+=clock()-at}}
+ let flight=null,again=false,diagnosticPending=false;
+ async function once(){const started=clock(),timing={event:'fitpp_poll_sync',pollViewMs:0,maxVerifyMs:0,maxPutMs:0,puts:0};
+ async function read(){const at=clock();try{return validateView(await loadView(),scope)}finally{timing.pollViewMs+=clock()-at}}
+ const finish=revision=>{if(timing.puts>0||diagnosticPending){log({...timing,pollViewMs:Math.round(timing.pollViewMs),maxVerifyMs:Math.round(timing.maxVerifyMs),maxPutMs:Math.round(timing.maxPutMs),totalMs:Math.round(clock()-started)});diagnosticPending=false}return {synced:true,revision}};
  for(let attempt=0;attempt<3;attempt++){
-   const view=validateView(await timed('pollViewMs',loadView),scope),text=render(view,scope);
-   const existing=await timed('maxReadMs',()=>api.pollMessage());
-   // Always read the actual message: recover after a restart or an uncertain edit.
-   if(existing.body.text!==text&&existing.body.text!==plainText(text)){await timed('maxEditMs',()=>api.editPollText(text));timing.puts++}
-   const latest=validateView(await timed('pollViewMs',loadView),scope);
-   if(latest.revision===view.revision&&render(latest,scope)===text){log({...timing,pollViewMs:Math.round(timing.pollViewMs),maxReadMs:Math.round(timing.maxReadMs),maxEditMs:Math.round(timing.maxEditMs),totalMs:Math.round(clock()-started)});return {synced:true,revision:latest.revision}};
+   const view=await read(),text=render(view,scope);
+   // The scoped API performs all identity/chat/MID/keyboard checks once, then compares/edits.
+   const result=await api.syncPollText(text,{clock});
+   timing.maxVerifyMs+=result.maxVerifyMs;timing.maxPutMs+=result.maxPutMs;
+   if(!result.edited)return finish(view.revision);
+   timing.puts++;
+   // Recheck Firestore only after a PUT: recover concurrent changes without doubling idle reads.
+   const latest=await read();
+   if(latest.revision===view.revision&&render(latest,scope)===text)return finish(latest.revision);
   }throw Error('POLL_VIEW_CHANGED_RETRY');}
- function sync(){if(flight){again=true;return flight}flight=(async()=>{do{again=false;await once()}while(again)})().finally(()=>{flight=null});return flight}
+ function sync({diagnostic=false}={}){diagnosticPending||=diagnostic;if(flight){again=true;return flight}flight=(async()=>{do{again=false;await once()}while(again)})().finally(()=>{flight=null});return flight}
  return {sync,busy:()=>!!flight};
 }
 module.exports={createPollSync,render,validateView,plainText};

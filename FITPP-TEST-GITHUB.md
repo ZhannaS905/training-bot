@@ -35,3 +35,9 @@ Deployment order:
 4. Test the existing poll: yes adds the FitPP name and count 1; repeated yes has no duplicate; cancel removes it and shows count 0. Stop/restart the test bot or simulate a failed PUT in a controlled test: reconciliation must rebuild from current Firestore bookings, not old votes. The original MID and button payloads must stay unchanged.
 
 A working Firebase session and reachable HTTPS mediator are still required. If the mediator is unavailable, no cached participant list is used; MAX display waits and retries. Names from MAX profiles are deliberately not persisted or transmitted.
+
+### One-second reconciliation and latency diagnostics
+
+The fallback reconciliation now ticks every 1000ms. The callback still synchronizes immediately after the mediator confirms the booking operation; it never waits for this timer. One shared queue serializes callback processing and reconciliation, so background projection reads cannot overlap callback writes or accumulate queued ticks. An unchanged MAX text still produces no PUT.
+
+Timing logs contain no identifiers, names, tokens or event bodies. `fitpp_test_booking` reports `queueWaitMs`, `bridgeUpdateMs` (mediator round trip including Firebase processing), `syncMs`, and total handler time. `fitpp_poll_sync` reports cumulative `pollViewMs` (both consistent reads), `maxReadMs`, `maxEditMs` (includes the existing pre-edit message verification), `puts`, and `totalMs`. These are measured local durations, not cross-host clock differences. MAX delivery time before the webhook is received is not measured. Historical callbacks cannot be timed retroactively; after rebuilding Training Test, one user yes/cancel cycle supplies real stage timings. The one-second timer only bounds idle fallback wait; it does not remove network or Firebase/MAX request latency.

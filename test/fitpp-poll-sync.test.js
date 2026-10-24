@@ -33,3 +33,29 @@ test('poll projection request signature is bound to its own read-only endpoint',
  const {signedPost}=require('../src/fitpp-test-bridge');const key='b'.repeat(64);let called=false;
  await signedPost({key,url:'https://example.test/bot/update'},'/bot/poll-view',scope,{now:()=>100000,transport:async(url,o)=>{called=true;assert.equal(url,'https://example.test/bot/poll-view');assert.equal(o.headers['x-signature'],require('node:crypto').createHmac('sha256',key).update(['100000','POST','/bot/poll-view',o.body].join(String.fromCharCode(10))).digest('hex'));return {ok:true,json:async()=>view(3)}}});assert.equal(called,true);
 });
+
+test('reconciliation runs at 1000ms, skips busy ticks and serializes callbacks',async()=>{
+ const {startReconciliation}=require('../src/fitpp-test-bridge');let tick,interval,release,active=0,peak=0,calls=0,cancelled=false;
+ const sync=async()=>{calls++;active++;peak=Math.max(peak,active);await new Promise(r=>release=r);active--};
+ const loop=startReconciliation(sync,{schedule:(fn,ms)=>{tick=fn;interval=ms;return 1},cancel:()=>cancelled=true});
+ const flush=()=>new Promise(r=>setImmediate(r));await flush();assert.equal(interval,1000);assert.equal(calls,1);
+ tick();tick();assert.equal(calls,1,'no parallel sync and no queued timer backlog');
+ const order=[];const callback=loop.run(async()=>{order.push('callback');active++;peak=Math.max(peak,active);active--;});
+ assert.deepEqual(order,[]);release();await callback;await flush();assert.equal(peak,1);assert.deepEqual(order,['callback']);
+ tick();await flush();assert.equal(calls,2);release();await flush();loop.stop();tick();await flush();assert.equal(calls,2);assert.equal(cancelled,true);
+});
+test('unchanged one-second reconciliations do not issue extra PUTs',async()=>{
+ const f=fixture(),s=createPollSync({scope,api:f.api,loadView:f.loadView});await s.sync();
+ for(let tick=0;tick<10;tick++)await s.sync();assert.equal(f.edits.length,1);
+});
+test('callback synchronizes immediately after commit, without waiting for a timer',async()=>{
+ const {receiver}=require('../src/fitpp-test-bridge');const order=[],logs=[];let time=0;
+ const r=receiver({key:'a'.repeat(64),url:'https://example.test/bot/update',scope:{...scope,user:'1234'}},{now:()=>100000,clock:()=>time,log:x=>logs.push(JSON.parse(x)),transport:async()=>{order.push('commit');time+=30;return {ok:true,json:async()=>({applied:true,booked:true})}},sync:async()=>{order.push('sync');time+=70}});
+ await r.receive({update_type:'message_callback',timestamp:100000,callback:{callback_id:'timed',payload:`poll:${scope.uuid}:yes`,user:{user_id:1234,is_bot:false}},message:{recipient:{chat_type:'chat',chat_id:CHAT},body:{mid:scope.mid}}});
+ assert.deepEqual(order,['commit','sync']);assert.equal(logs[0].bridgeUpdateMs,30);assert.equal(logs[0].syncMs,70);assert.equal(logs[0].totalMs,100);
+});
+test('projection, MAX verification and PUT timings are separated without participant data',async()=>{
+ let time=0,text='old';const logs=[];const api={pollMessage:async()=>{time+=20;return {body:{text}}},editPollText:async value=>{time+=40;text=value}};
+ await createPollSync({scope,clock:()=>time,log:x=>logs.push(x),loadView:async()=>{time+=10;return view(3)},api}).sync();
+ assert.deepEqual(logs,[{event:'fitpp_poll_sync',pollViewMs:20,maxReadMs:20,maxEditMs:40,puts:1,totalMs:80}]);
+});

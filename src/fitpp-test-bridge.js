@@ -1,6 +1,6 @@
 'use strict';
 const http=require('node:http');
-const {at}=require('./training-startup-diagnostic');
+const {at,format}=require('./training-startup-diagnostic');
 const {createHmac}=require('node:crypto');
 const {createWebhook}=require('./memory-test-webhook');
 const {config,guardedApi}=require('./memory-training-test');
@@ -19,7 +19,7 @@ async function signedPost(s,path,payload,{transport=fetch,now=Date.now}={}){
  const target=new URL(s.url);target.pathname=path;const body=JSON.stringify(payload),time=String(now());
  const signature=createHmac('sha256',s.key).update([time,'POST',path,body].join(String.fromCharCode(10))).digest('hex');
  const r=await transport(target.href,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json','x-time':time,'x-signature':signature},body,signal:AbortSignal.timeout(20000)});
- if(!r.ok)throw Error('FITPP_BRIDGE_REJECTED');return r.json();
+ if(!r.ok){const error=Error('FITPP_BRIDGE_REJECTED');error.status=r.status;throw error}return r.json();
 }
 function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,optimistic,clock=()=>performance.now()}={}){
  return {async receive(u,receivedAt=clock()){
@@ -51,13 +51,13 @@ async function main({env=process.env,verify=guardedApi,post=signedPost,makeServe
  const optimistic=s.pollSync?createRam({scope:s.scope,api:{...api,syncPollText:(...args)=>at('MAX_POLL',()=>api.syncPollText(...args))},
   loadView:()=>post(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),
   log:entry=>console.log(JSON.stringify(entry))}):null;
- // Fail startup closed if the existing poll cannot be restored. Never initialize it empty.
- if(optimistic)await at('BRIDGE_SNAPSHOT',()=>optimistic.refresh());
- const loop=reconcile(optimistic?()=>optimistic.refresh():null,{onError:()=>console.error('Training Test: RAM reconciliation pending; automatic retry.')});
+ // Listen independently of the bridge. A cold controller never invents an empty poll.
+ // Reconciliation primes the binding in the background and retries after failure.
+ const loop=reconcile(optimistic?()=>at('BRIDGE_SNAPSHOT',()=>optimistic.refresh()):null,{onError:error=>console.error(format(error).replace('startup refused','reconciliation pending'))});
  const callbacks=receiver(s,{optimistic});
  // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
  const handler=createWebhook({receive:u=>callbacks.receive(u,performance.now())},c.secret).listeners('request')[0];
- const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
+ const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync,pollDisplayReady:optimistic?optimistic.status().ready:null}));void handler(req,res)});
  await at('LISTEN',()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)})).catch(error=>{loop.stop();throw error});
  const stop=()=>{loop.stop();server.close();server.closeIdleConnections?.()};process.once('SIGINT',stop);process.once('SIGTERM',stop);
  console.log('Training Test: verified identity/chat; exact-poll bridge ready; poll display sync '+(s.pollSync?'enabled':'disabled')+'; no poll publication.');return server;

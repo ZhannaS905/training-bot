@@ -12,6 +12,7 @@ const reasons = new Set(['TEST_CONFIG','TEST_TOKEN_REQUIRED','EXPECTED_ID_REQUIR
  'POLL_PARTICIPANT_REJECTED','RAM_REVISION_REGRESSION','INVALID_TRAINING_DATE']);
 function classify(error) {
  // Equality against fixed literals only: never interpolate external data.
+ if(error?.message==='FITPP_BRIDGE_REJECTED'&&[401,403,404,429,500,502,503,504].includes(error?.status))return 'FITPP_BRIDGE_HTTP_'+error.status;
  if (reasons.has(error?.message)) return error.message;
  if (codes.has(error?.code)) return error.code;
  if (codes.has(error?.cause?.code)) return error.cause.code;

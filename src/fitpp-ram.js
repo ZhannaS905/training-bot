@@ -19,7 +19,10 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
  function display(receivedAt){
   const job=displayTail.then(async()=>{
    if(!base)return;
-   const result=await api.syncPollText(render(view(),scope),{clock});
+   const projected=render(view(),scope);
+   const waiting=Array.from(pending.values()).some(p=>p.fast);
+   const text=waiting?projected.replace('✅ Записано','⏳ Предварительный список')+'\n\n⏳ Изменение ещё не подтверждено FitPP.':projected;
+   const result=await api.syncPollText(text,{clock});
    if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null});
   });
   displayTail=job.catch(()=>{});return job;
@@ -49,7 +52,11 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
   pending.set(id,{event,at,fast});
   // No Firebase operation is awaited before scheduling the first guarded MAX PUT.
   const shown=fast?display(receivedAt):Promise.resolve();
-  const saved=writeTail.then(commit);writeTail=saved.catch(()=>{});
+  const saved=writeTail.then(async()=>{
+   // Finish the immediate MAX attempt before starting persistence. A failed MAX
+   // attempt must not lose the action; authoritative reconciliation repairs it.
+   await shown.catch(()=>{});return commit();
+  });writeTail=saved.catch(()=>{});
   const job=(async()=>{
    const [write]=await Promise.allSettled([saved,shown]);
    // Apply the accepted intent to the confirmed local base before removing its overlay.
@@ -74,6 +81,6 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
   })().finally(()=>inflight.delete(id));
   inflight.set(id,job);return job;
  }
- return {run,refresh};
+ return {run,refresh,status:()=>({ready,pending:pending.size})};
 }
 module.exports={createRam};

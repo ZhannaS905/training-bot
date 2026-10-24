@@ -15,3 +15,5 @@
 !src/test-publication-attempts.js
 
 !src/fitpp-test-bridge.js
+
+!src/fitpp-poll-sync.js

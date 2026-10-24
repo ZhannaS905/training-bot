@@ -17,7 +17,7 @@ function config(env) {
   return { admins: admins.filter(Boolean), token, expectedId: env.TEST_EXPECTED_BOT_ID, secret: env.WEBHOOK_SECRET,
     send: flag('TEST_ALLOW_SEND'), edit: flag('TEST_ALLOW_EDIT'), remove: flag('TEST_ALLOW_DELETE'), auto: flag('AUTO_PUBLISH') };
 }
-async function guardedApi(c, fetchImpl) {
+async function guardedApi(c, fetchImpl, { pollScope } = {}) {
   const raw = new MaxApi(c.token, fetchImpl);
   const me = await raw.request('GET', '/me');
   if (!identityAccepted(checkTestBotIdentity(me, c.expectedId))) throw Error('TEST_IDENTITY_REFUSED');
@@ -25,9 +25,27 @@ async function guardedApi(c, fetchImpl) {
   if (String(chat.chat_id) !== CHAT || chat.title !== 'Тест тренировок') throw Error('TEST_CHAT_REFUSED');
   const member = await raw.request('GET', `/chats/${CHAT}/members/me`);
   if (member.user_id !== me.user_id || member.is_bot !== true) throw Error('TEST_MEMBERSHIP_REFUSED');
+  if (pollScope && (pollScope.chat !== CHAT || !/^mid\.[a-zA-Z0-9]+$/.test(pollScope.mid || '') || !/^[a-f0-9-]{36}$/.test(pollScope.uuid || ''))) throw Error('POLL_SCOPE_REFUSED');
+  async function pollMessage() {
+    if (!pollScope) throw Error('POLL_SCOPE_REFUSED');
+    const message = await raw.request('GET', '/messages/' + encodeURIComponent(pollScope.mid));
+    if (message?.body?.mid !== pollScope.mid || String(message?.recipient?.chat_id) !== CHAT || message?.sender?.user_id !== me.user_id || message?.sender?.is_bot !== true) throw Error('POLL_MESSAGE_REFUSED');
+    const keyboards = (message.body.attachments || []).filter(a => a.type === 'inline_keyboard');
+    const buttons = keyboards.flatMap(a => (a.payload?.buttons || []).flat());
+    const expected = ['poll:' + pollScope.uuid + ':yes', 'poll:' + pollScope.uuid + ':cancel'];
+    if (keyboards.length !== 1 || buttons.length !== 2 || buttons.some(b => b.type !== 'callback') || !expected.every(p => buttons.filter(b => b.payload === p).length === 1)) throw Error('POLL_BUTTONS_REFUSED');
+    return message;
+  }
   const owned = new Set();
   const requireOwned = mid => { if (!owned.has(mid)) throw Error('MESSAGE_REFUSED'); };
   return {
+    pollMessage,
+    async editPollText(text) {
+      if (!pollScope || typeof text !== 'string' || !text || text.length > 4000) throw Error('POLL_TEXT_REFUSED');
+      await pollMessage();
+      // Omitted attachments preserve the existing keyboard exactly.
+      return raw.edit(pollScope.mid, { text, format: 'html', notify: false });
+    },
     async send(chatId, body, options) {
       if (!c.send || chatId !== CHAT) throw Error('SEND_REFUSED');
       const mid = await raw.send(CHAT, body, options); owned.add(mid); return mid;

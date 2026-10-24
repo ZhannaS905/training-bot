@@ -3,8 +3,7 @@ const http=require('node:http');
 const {createHmac}=require('node:crypto');
 const {createWebhook}=require('./memory-test-webhook');
 const {config,guardedApi}=require('./memory-training-test');
-const {createPollSync}=require('./fitpp-poll-sync');
-const {createOptimistic}=require('./fitpp-optimistic');
+const {createRam}=require('./fitpp-ram');
 function settings(env){
  if(env.BOT_MODE!=='test'||env.FITPP_BRIDGE_ENABLED!=='true')throw Error('TEST_BRIDGE_DISABLED');
  if(['AUTO_PUBLISH','TEST_ALLOW_SEND','TEST_ALLOW_EDIT','TEST_ALLOW_DELETE'].some(k=>env[k]!=='false'))throw Error('POLL_WRITES_MUST_BE_DISABLED');
@@ -47,11 +46,15 @@ function startReconciliation(sync,{schedule=setInterval,cancel=clearInterval,onE
 }
 async function main(){
  const s=settings(process.env),c=config(process.env),api=await guardedApi(c,undefined,s.pollSync?{pollScope:s.scope}:{});
- const synchronizer=s.pollSync?createPollSync({scope:s.scope,api,log:entry=>console.log(JSON.stringify(entry)),loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid})}):null;
- const loop=startReconciliation(synchronizer?()=>synchronizer.sync():null,{onError:()=>console.error('Training Test: poll display sync pending; automatic retry.')});
- const optimistic=synchronizer?createOptimistic({scope:s.scope,api,loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),reconcile:options=>synchronizer.sync({...options,diagnostic:true}),log:entry=>console.log(JSON.stringify(entry))}):null;
- const callbacks=receiver(s,{optimistic,sync:synchronizer?()=>synchronizer.sync({diagnostic:true}):undefined});
- const handler=createWebhook({receive:u=>{const receivedAt=performance.now();return loop.run(()=>callbacks.receive(u,receivedAt))}},c.secret).listeners('request')[0];
+ const optimistic=s.pollSync?createRam({scope:s.scope,api,
+  loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),
+  log:entry=>console.log(JSON.stringify(entry))}):null;
+ // Fail startup closed if the existing poll cannot be restored. Never initialize it empty.
+ if(optimistic)await optimistic.refresh();
+ const loop=startReconciliation(optimistic?()=>optimistic.refresh():null,{onError:()=>console.error('Training Test: RAM reconciliation pending; automatic retry.')});
+ const callbacks=receiver(s,{optimistic});
+ // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
+ const handler=createWebhook({receive:u=>callbacks.receive(u,performance.now())},c.secret).listeners('request')[0];
  const server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)});
  const stop=()=>{loop.stop();server.close();server.closeIdleConnections?.()};process.once('SIGINT',stop);process.once('SIGTERM',stop);

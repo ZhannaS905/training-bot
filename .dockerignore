@@ -19,3 +19,5 @@
 !src/fitpp-poll-sync.js
 
 !src/fitpp-optimistic.js
+
+!src/fitpp-ram.js

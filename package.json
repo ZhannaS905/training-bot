@@ -1,25 +1,18 @@
 {
   "name": "fitness-training-bot",
-  "version": "1.0.0",
-  "description": "Бот для записи на тренировки с системой абонементов и оплаты",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Расписание тренировок и устойчивые опросы MAX",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "start": "node --env-file=.env bot.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check bot.js && node --test test/*.test.js",
+    "start:memory:test": "node memory-training-test.cjs",
+    "start:bothost:test": "node bothost-test.cjs"
   },
-  "keywords": [
-    "bot",
-    "fitness",
-    "training",
-    "maxbot"
-  ],
-  "author": ":Zhanna S",
-  "license": "MIT",
-  "dependencies": {
-    "dotenv": "^16.0.3",
-    "@maxhub/max-bot-api": "^0.3.1"
+  "engines": {
+    "node": ">=22.0.0"
   },
-  "devDependencies": {
-    "nodemon": "^2.0.20"
-  }
+  "license": "MIT"
 }

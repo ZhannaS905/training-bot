@@ -1,5 +1,6 @@
 'use strict';
 const http=require('node:http');
+const {at}=require('./training-startup-diagnostic');
 const {createHmac}=require('node:crypto');
 const {createWebhook}=require('./memory-test-webhook');
 const {config,guardedApi}=require('./memory-training-test');
@@ -44,19 +45,20 @@ function startReconciliation(sync,{schedule=setInterval,cancel=clearInterval,onE
  const timer=sync?schedule(retry,30000):null;if(sync)retry();
  return {run,stop(){stopped=true;if(timer!==null)cancel(timer)}};
 }
-async function main(){
- const s=settings(process.env),c=config(process.env),api=await guardedApi(c,undefined,s.pollSync?{pollScope:s.scope}:{});
- const optimistic=s.pollSync?createRam({scope:s.scope,api,
-  loadView:()=>signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),
+async function main({env=process.env,verify=guardedApi,post=signedPost,makeServer=http.createServer,reconcile=startReconciliation}={}){
+ const {s,c}=await at('CONFIG',()=>({s:settings(env),c:config(env)}));
+ const api=await at('MAX_IDENTITY',()=>verify(c,undefined,s.pollSync?{pollScope:s.scope}:{}));
+ const optimistic=s.pollSync?createRam({scope:s.scope,api:{...api,syncPollText:(...args)=>at('MAX_POLL',()=>api.syncPollText(...args))},
+  loadView:()=>post(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid,optimistic:true}),
   log:entry=>console.log(JSON.stringify(entry))}):null;
  // Fail startup closed if the existing poll cannot be restored. Never initialize it empty.
- if(optimistic)await optimistic.refresh();
- const loop=startReconciliation(optimistic?()=>optimistic.refresh():null,{onError:()=>console.error('Training Test: RAM reconciliation pending; automatic retry.')});
+ if(optimistic)await at('BRIDGE_SNAPSHOT',()=>optimistic.refresh());
+ const loop=reconcile(optimistic?()=>optimistic.refresh():null,{onError:()=>console.error('Training Test: RAM reconciliation pending; automatic retry.')});
  const callbacks=receiver(s,{optimistic});
  // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
  const handler=createWebhook({receive:u=>callbacks.receive(u,performance.now())},c.secret).listeners('request')[0];
- const server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
- await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)});
+ const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:true,pollDisplaySync:s.pollSync}));void handler(req,res)});
+ await at('LISTEN',()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)})).catch(error=>{loop.stop();throw error});
  const stop=()=>{loop.stop();server.close();server.closeIdleConnections?.()};process.once('SIGINT',stop);process.once('SIGTERM',stop);
  console.log('Training Test: verified identity/chat; exact-poll bridge ready; poll display sync '+(s.pollSync?'enabled':'disabled')+'; no poll publication.');return server;
 }

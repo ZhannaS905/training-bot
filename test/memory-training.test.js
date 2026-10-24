@@ -83,6 +83,7 @@ test('Training Test entrypoint schedules ticks every 1000 ms',async()=>{
  const vm=require('node:vm');const fs=require('node:fs');let interval;let ticks=0;
  const server={once(){},listen(port,host,resolve){resolve();}};
  const context={require(name){
+  if(name==='./src/training-startup-diagnostic')return require('../src/training-startup-diagnostic');
   if(name==='node:http')return {createServer:()=>server};
   if(name==='node:crypto')return require('node:crypto');
   if(name==='./src/memory-test-webhook')return {createWebhook:()=>({listeners:()=>[()=>{}]})};

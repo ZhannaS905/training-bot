@@ -34,7 +34,27 @@ async function connect({env,sdk}) {
   const {createDirectDb}=require('./fitpp-direct-db');
   const db=createDirectDb({sdk,raw,projectId:c.projectId,botUid:c.uid,validateAuth,getUid:()=>auth.currentUser?.uid,writeEnabled:()=>env.FITPP_DIRECT_WRITES_ENABLED==='true'});
   // Firebase client SDK owns refresh lifecycle. Never persist or log tokens.
-  return {db,close};
+  // Separate capability: never widen the booking adapter's paths or write flag.
+  function contactStore(botId,{writeEnabled=()=>false}={}) {
+   const {firebaseStore,MAIN,LINKS}=require('./contact-linking');
+   const guarded={doc(database,path){
+    if(database!==raw||![MAIN,LINKS].includes(path))throw Error('CONTACT_PATH_REFUSED');
+    return sdk.doc(raw,path);
+   },runTransaction:async(database,fn)=>{
+    if(database!==raw)throw Error('CONTACT_PATH_REFUSED');
+    await validateAuth();
+    return sdk.runTransaction(raw,async tx=>{
+     await validateAuth();
+     const value=await fn({get:ref=>tx.get(ref),set(ref,data){
+      if(ref.path!==LINKS||!writeEnabled())throw Error('CONTACT_WRITES_DISABLED');
+      tx.set(ref,data);
+     }});
+     await validateAuth();return value;
+    },{maxAttempts:5});
+   }};
+   return firebaseStore({sdk:guarded,db:raw,botId});
+  }
+  return {db,contactStore,close};
  } catch(error) {await close();const safe=require('./fitpp-direct-diagnostic').mark(error,'CONNECT');safe.message='DIRECT_AUTH_CONNECTION_REJECTED';throw safe}
 }
 module.exports={settings,connect,OWNER_UID};

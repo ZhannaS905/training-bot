@@ -12,6 +12,7 @@ COPY certs/russian-trusted-root-ca.pem ./certs/
 ENV NODE_ENV=production BOT_MODE=test CHAT_IDS=-80345864298680 \
     AUTO_PUBLISH=false TEST_ALLOW_SEND=false TEST_ALLOW_EDIT=false TEST_ALLOW_DELETE=false \
     FITPP_DIRECT_ENABLED=false FITPP_DIRECT_WRITES_ENABLED=false OWNER_DIALOG_ENABLED=false \
+    CONTACT_LINK_ENABLED=true CONTACT_LINK_REPLY_ENABLED=true CONTACT_LINK_WRITES_ENABLED=true \
     NODE_EXTRA_CA_CERTS=/opt/training-test/certs/russian-trusted-root-ca.pem
 USER node
 EXPOSE 3000

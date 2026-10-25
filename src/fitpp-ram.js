@@ -2,7 +2,7 @@
 const {validateView,render}=require('./fitpp-poll-sync');
 const {provisional}=require('./fitpp-optimistic');
 // One controller per exact poll. RAM is a projection, never a durable inbox.
-function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),log=()=>{}}){
+function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),log=()=>{},sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  let ready=false,base=null,generation=0,writeTail=Promise.resolve(),displayTail=Promise.resolve(),refreshFlight=null;
  const pending=new Map(),inflight=new Map();
  function view(){
@@ -24,7 +24,7 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
    const text=render(view(),scope);
    const started=clock();
    const result=await api.syncPollText(text,{clock});
-   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null,displayQueueMs:Math.round(started-receivedAt),maxVerifyMs:result.maxVerifyMs??null,maxPutMs:result.maxPutMs??null});
+   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null,displayQueueMs:Math.round(started-receivedAt),putStartedMs:result.edited&&result.putStartedAt!=null?Math.round(result.putStartedAt-receivedAt):null,maxVerifyMs:result.maxVerifyMs??null,maxPutMs:result.maxPutMs??null});
   });
   displayTail=job.catch(()=>{});return job;
  }
@@ -56,7 +56,18 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
   const saved=writeTail.then(async()=>{
    // Persistence and the immediate MAX attempt overlap. Durable writes keep
    // their own order; settlement below waits for MAX before any correction.
-   return commit();
+   const started=clock();
+   for(let attempt=1;;attempt++){
+    try{const value=await commit();log({event:'fitpp_ram_persistence',attempts:attempt,confirmed:true,persistenceQueueMs:Math.round(started-receivedAt),persistenceMs:Math.round(clock()-started)});return value}
+    catch(error){
+     const code=String(error?.code||'').replace(/^firestore\//,'');
+     const transient=['unavailable','deadline-exceeded','aborted','resource-exhausted'].includes(code)||[408,429,500,502,503,504].includes(error?.status)||['TimeoutError','AbortError'].includes(error?.name);
+     // Retry the identical callback inside the ordered write slot. Durable event
+     // deduplication handles an ambiguous acknowledgement; webhook stays pending.
+     if(!transient||attempt>=3){log({event:'fitpp_ram_persistence',attempts:attempt,confirmed:false,persistenceQueueMs:Math.round(started-receivedAt),persistenceMs:Math.round(clock()-started)});throw error}
+     await sleep(100*2**(attempt-1));
+    }
+   }
   });writeTail=saved.catch(()=>{});
   const job=(async()=>{
    const [write]=await Promise.allSettled([saved,shown]);

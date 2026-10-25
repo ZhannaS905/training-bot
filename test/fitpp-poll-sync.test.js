@@ -69,7 +69,7 @@ test('scoped synchronization verifies once before PUT and rejects wrong MID/owne
  else if(url.pathname.endsWith('/members/me'))d={user_id:123,is_bot:true};else if(url.pathname.startsWith('/chats/'))d={chat_id:CHAT,title:'Тест тренировок'};
  else if(o.method==='GET'){reads++;time+=12;d=structuredClone(message)}else{puts++;time+=34;const body=JSON.parse(o.body);assert.deepEqual(Object.keys(body).sort(),['format','notify','text']);message.body.text=plainText(body.text);d={success:true}}return {ok:true,json:async()=>d}};
  const api=await guardedApi({token:'mock',expectedId:'123',send:false,edit:false,remove:false},transport,{pollScope:scope});
- const desired=render(view(2,[person]),scope),first=await api.syncPollText(desired,{clock:()=>time});assert.deepEqual(first,{edited:true,maxVerifyMs:12,maxPutMs:34});assert.equal(reads,1);assert.equal(puts,1);
+ const desired=render(view(2,[person]),scope),first=await api.syncPollText(desired,{clock:()=>time});assert.deepEqual(first,{edited:true,putStartedAt:12,maxVerifyMs:12,maxPutMs:34});assert.equal(reads,1);assert.equal(puts,1);
  const second=await api.syncPollText(desired,{clock:()=>time});assert.equal(second.edited,false);assert.equal(puts,1);assert.equal(reads,2);
  const good=structuredClone(message);
  for(const mutate of [m=>m.body.mid='mid.other',m=>m.sender.user_id=999,m=>m.recipient.chat_id='-1',m=>m.body.attachments[0].payload.buttons[0][0].payload='poll:wrong:yes']){

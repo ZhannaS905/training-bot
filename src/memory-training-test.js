@@ -44,7 +44,7 @@ async function guardedApi(c, fetchImpl, { pollScope } = {}) {
     if(skipUnchanged&&(message.body.text===text||message.body.text===plain))return {edited:false,maxVerifyMs:verified-started,maxPutMs:0};
     // Omitted attachments preserve the existing keyboard exactly.
     await raw.edit(pollScope.mid,{text,format:'html',notify:false});
-    return {edited:true,maxVerifyMs:verified-started,maxPutMs:clock()-verified};
+    return {edited:true,putStartedAt:verified,maxVerifyMs:verified-started,maxPutMs:clock()-verified};
   }
   const owned = new Set();
   const requireOwned = mid => { if (!owned.has(mid)) throw Error('MESSAGE_REFUSED'); };

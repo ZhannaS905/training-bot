@@ -106,3 +106,27 @@ test('callback timestamp controls both optimistic projection and durable confirm
  const gate=deferred(),count=f.puts.length,job=c.run(e,()=>gate.promise);
  await tick();assert.equal(f.puts.length,count);gate.resolve({applied:false});await job;
 });
+
+test('transient retries keep later writes ordered and webhook work pending',async()=>{
+ const f=fixture(),pause=deferred(),order=[];let attempts=0,settled=false;
+ const c=createRam({scope,loadView:async()=>f.view(),api:{syncPollText:async()=>({edited:true})},now:()=>100000,sleep:()=>pause.promise});
+ await c.refresh();const yes=f.e(),cancel=f.e('cancel',100001);
+ const a=c.run(yes,async()=>{order.push('yes');if(++attempts===1)throw Object.assign(Error('private'),{code:'firestore/unavailable'});return f.commit(yes)}).then(()=>{settled=true});
+ const b=c.run(cancel,async()=>{order.push('cancel');return f.commit(cancel)});
+ await tick();assert.equal(settled,false);assert.deepEqual(order,['yes']);
+ pause.resolve();await Promise.all([a,b]);assert.deepEqual(order,['yes','yes','cancel']);assert.equal(f.view().participants.length,0);
+});
+test('exhausted transient retries roll back; permanent rejection is never retried',async()=>{
+ for(const code of ['unavailable','permission-denied']){
+  const f=fixture([other]);let attempts=0;const logs=[];
+  const c=createRam({scope,loadView:async()=>f.view(),api:{syncPollText:async value=>{f.puts.push(value);return {edited:true}}},now:()=>100000,sleep:async()=>{},log:x=>logs.push(x)});
+  await c.refresh();await assert.rejects(c.run(f.e(),async()=>{attempts++;throw Object.assign(Error('SECRET NAME'),{code})}));
+  assert.equal(attempts,code==='unavailable'?3:1);assert.doesNotMatch(f.puts.at(-1),/Confirmed/);assert.match(f.puts.at(-1),/Other/);assert.doesNotMatch(JSON.stringify(logs),/SECRET NAME/);
+ }
+});
+test('first PUT diagnostics distinguish dispatch from MAX acknowledgement',async()=>{
+ const f=fixture(),logs=[];let time=10;
+ const c=createRam({scope,loadView:async()=>f.view(),now:()=>100000,clock:()=>time,log:x=>logs.push(x),api:{syncPollText:async()=>{const putStartedAt=time+5;time+=25;return {edited:true,putStartedAt,maxVerifyMs:5,maxPutMs:20}}}});
+ await c.refresh();const received=time,e=f.e();await c.run(e,()=>f.commit(e),received);
+ const timing=logs.find(x=>x.event==='fitpp_ram_first_put');assert.equal(timing.putStartedMs,5);assert.equal(timing.firstPutMs,25);assert.equal(timing.maxPutMs,20);
+});

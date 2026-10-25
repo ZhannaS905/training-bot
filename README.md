@@ -25,7 +25,7 @@
 
 ## Изолированная проверка
 
-Нужен Node.js 22 или новее. Внешних npm-зависимостей нет; package.json и lock-файл согласованы.
+Нужен Node.js 22 или новее. Корневые package.json и lock-файл включают Firebase SDK для Training Test; установка не активирует direct-режим. Особенности проверки BotHost: [BOTHOST-SDK-BUILD.md](BOTHOST-SDK-BUILD.md).
 
 ```sh
 npm ci --ignore-scripts

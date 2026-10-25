@@ -14,5 +14,8 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "firebase": "12.19.0"
+  }
 }

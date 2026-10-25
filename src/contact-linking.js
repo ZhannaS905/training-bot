@@ -27,10 +27,11 @@ function ownPhone(payload,sender,token){
  return phone(tels[0].slice(tels[0].indexOf(':')+1));
 }
 function matching(state,number){
- if(!Array.isArray(state?.clients)||state.clients.some(c=>!client(c?.id))||
+ if(!Array.isArray(state?.clients)||state.clients.some(c=>typeof c?.id!=='string'||!c.id)||
     new Set(state.clients.map(c=>c.id)).size!==state.clients.length)throw Error('SYNTHETIC_CLIENTS_REQUIRED');
+ if(number===null)return null; // Startup checks structure without inspecting phones.
  const matches=state.clients.filter(c=>phone(c.phone)===number);
- return matches.length===1?matches[0].id:null;
+ return matches.length===1&&client(matches[0].id)&&!matches[0].archivedAt?matches[0].id:null;
 }
 function validateRegistry(value,botId){
  if(value===undefined)return {version:1,botId,bindings:[]};

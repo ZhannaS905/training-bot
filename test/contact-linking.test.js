@@ -51,7 +51,7 @@ test('transaction rechecks phone and conflicts in both directions, never overwri
 });
 test('production scope, real clients and corrupt registries fail closed',async()=>{
  a.throws(()=>firebaseStore({sdk:{},db:{app:{options:{projectId:'fitpp-crm'}}},botId:90}),/TEST_SCOPE/);
- const f=setup([{id:'real-client',phone:'79990000000'}]);await a.rejects(f.store.find('79990000000'),/STORAGE_REFUSED/);
+ const f=setup([{id:'real-client',phone:'79990000000'}]);a.equal(await f.store.find('79990000000'),null);a.equal(f.writes,0);
  const q=setup();q.setRegistry({version:1,botId:90,bindings:[{}]});await a.rejects(q.store.find('79990000000'),/STORAGE_REFUSED/);
 });
 test('duplicate numbers and invalid binding writes are refused; errors hide PII',async()=>{
@@ -68,4 +68,13 @@ test('callbacks and plain phone text cannot create a binding',async()=>{
  const f=setup();await f.service.receive(f.start);
  await f.service.receive(f.msg({text:'79990000000'}));
  await f.service.receive({update_type:'message_callback',timestamp:time});a.equal(f.writes,0);
+});
+
+test('additional unrelated cards do not block startup or demo linking; foreign phone duplicates still block',async()=>{
+ const f=setup([{id:'demo-client-1',phone:'79990000000'},{id:'unrelated-test-card',phone:'79990000001'}]);
+ await f.store.inspect();await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,1);
+ const q=setup([{id:'demo-client-1',phone:'79990000000'},{id:'foreign-card',phone:'89990000000'}]);
+ await q.service.receive(q.start);await q.service.receive(q.contact());a.equal(q.writes,0);
+ const r=setup([{id:'demo-client-1',phone:'79990000000',archivedAt:1}]);
+ a.equal(await r.store.find('79990000000'),null);
 });

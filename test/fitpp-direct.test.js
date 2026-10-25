@@ -72,3 +72,28 @@ test('real service commits yes/cancel, ignores stale events, and renders authori
  assert.deepEqual(result.participants,[]);assert.equal(result.revision,2);
  assert.equal(data.get(BOOKINGS).entries[bookingKey('demo-client-1',POLL.date,POLL.location)],undefined);
 });
+
+test('legacy registered poll without UUID still produces validated optimistic context and immediate RAM PUT',async()=>{
+ const {createRam}=require('../src/fitpp-ram');
+ const {db,data}=fixture(),prefix='fitppTestWorkspaces/synthetic-v1/';
+ data.delete(prefix+'maxPolls/'+hash([POLL.chat,POLL.mid]));
+ const {Service}=require('../direct-core/src/service.cjs');
+ await new Service(db,{now:()=>now}).registerPoll(poll);
+ assert.equal(data.get(prefix+'maxPolls/'+hash([POLL.chat,POLL.mid])).uuid,undefined);
+ data.set(prefix+'maxClientBindings/'+hash('demo-client-1'),{userHash:hash(USER)});
+ const transport=createDirectTransport({db,key,poll,enabled:true,verifiedTestIdentity:true,now:()=>now});
+ const s={key,url:'https://direct.invalid/bot/update'},payload={chat:POLL.chat,mid:POLL.mid,uuid:POLL.uuid,optimistic:true};
+ const loadView=()=>signedPost(s,'/bot/poll-view',payload,{transport,now:()=>now});
+ const view=await loadView();assert.ok(view.optimistic);assert.equal(view.optimisticSkipReason,undefined);
+ let finish,settled=false,text='';const gate=new Promise(r=>{finish=r}),logs=[];
+ const ram=createRam({scope,loadView,now:()=>now,log:x=>logs.push(x),api:{syncPollText:async value=>{text=value;return {edited:true}}}});
+ await ram.refresh();const job=ram.run(event(),async()=>{await gate;return {applied:false}}).then(()=>{settled=true});
+ await new Promise(r=>setImmediate(r));assert.equal(settled,false);assert.match(text,/Записано \(1\)/);assert.ok(logs.some(x=>x.event==='fitpp_ram_first_put'&&x.edited));
+ finish();await job;
+ // Explicit foreign UUID must continue to disable optimism.
+ data.get(prefix+'maxPolls/'+hash([POLL.chat,POLL.mid])).uuid='foreign';
+ const rejected=await loadView();assert.equal(rejected.optimistic,null);assert.equal(rejected.optimisticSkipReason,'poll_context_invalid');
+ delete data.get(prefix+'maxPolls/'+hash([POLL.chat,POLL.mid])).uuid;
+ data.delete(prefix+'maxClientBindings/'+hash('demo-client-1'));
+ const unbound=await loadView();assert.equal(unbound.optimistic,null);assert.equal(unbound.optimisticSkipReason,'reverse_binding_invalid');
+});

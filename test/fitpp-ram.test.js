@@ -130,3 +130,37 @@ test('first PUT diagnostics distinguish dispatch from MAX acknowledgement',async
  await c.refresh();const received=time,e=f.e();await c.run(e,()=>f.commit(e),received);
  const timing=logs.find(x=>x.event==='fitpp_ram_first_put');assert.equal(timing.putStartedMs,5);assert.equal(timing.firstPutMs,25);assert.equal(timing.maxPutMs,20);
 });
+
+test('fast path skip diagnostics classify cold, missing context, stale, mismatch and no-op without PII',async()=>{
+ const cases=[
+  {warm:false,reason:'snapshot_missing'},
+  {change:v=>{v.optimistic=null;v.optimisticSkipReason='reverse_binding_invalid'},reason:'optimistic_context_missing',contextReason:'reverse_binding_invalid'},
+  {change:v=>{v.optimistic=null;v.optimisticSkipReason='PRIVATE NAME'},reason:'optimistic_context_missing',contextReason:'unspecified'},
+  {change:v=>{v.optimistic.lastEventAt=100000},reason:'stale_event'},
+  {change:v=>{v.participants=[self]},reason:'participants_unchanged'},
+  {event:e=>{e.callback.timestamp=100001},reason:'timestamp_mismatch'},
+ ];
+ for(const item of cases){
+  const f=fixture(),logs=[],gate=deferred();
+  const c=createRam({scope,now:()=>100000,loadView:async()=>{const v=f.view();item.change?.(v);return v},api:{syncPollText:async()=>({edited:false})},log:x=>logs.push(x)});
+  if(item.warm!==false)await c.refresh();const e=f.e();item.event?.(e);
+  const job=c.run(e,()=>gate.promise);await tick();
+  const decision=logs.find(x=>x.event==='fitpp_ram_fast_path');assert.equal(decision.reason,item.reason);assert.equal(decision.used,false);if(item.contextReason)assert.equal(decision.contextReason,item.contextReason);
+  assert.doesNotMatch(JSON.stringify(logs),/PRIVATE NAME|Confirmed|Other|callback_id|demo-client|mid\.test/);
+  gate.resolve({applied:false});await job;
+ }
+});
+test('MAX failure is diagnosed even when no first PUT succeeds',async()=>{
+ const f=fixture(),c=f.make();await c.refresh();f.failMax(1);const e=f.e();await c.run(e,()=>f.commit(e));
+ const first=f.logs.find(x=>x.event==='fitpp_ram_first_put');assert.equal(first.outcome,'max_failed');assert.equal(first.firstPutMs,null);
+});
+
+test('pending newer callbacks and duplicate deliveries have explicit skip reasons',async()=>{
+ const f=fixture(),c=f.make(),gate=deferred();await c.refresh();
+ const first=f.e('yes',100002),a=c.run(first,()=>gate.promise);
+ assert.equal(c.run(first,()=>{throw Error('duplicate')}),a);
+ const older=f.e('yes',100001),b=c.run(older,async()=>({applied:false}));
+ assert.ok(f.logs.some(x=>x.event==='fitpp_ram_fast_path'&&x.reason==='pending_newer_event'));
+ assert.ok(f.logs.some(x=>x.event==='fitpp_ram_fast_path'&&x.reason==='duplicate_inflight'));
+ gate.resolve({applied:false});await Promise.all([a,b]);
+});

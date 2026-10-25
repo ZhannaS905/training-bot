@@ -52,7 +52,7 @@ test('callback synchronizes immediately after commit, without waiting for a time
  const {receiver}=require('../src/fitpp-test-bridge');const order=[],logs=[];let time=0;
  const r=receiver({key:'a'.repeat(64),url:'https://example.test/bot/update',scope:{...scope,user:'1234'}},{now:()=>100000,clock:()=>time,log:x=>logs.push(JSON.parse(x)),transport:async()=>{order.push('commit');time+=30;return {ok:true,json:async()=>({applied:true,booked:true})}},sync:async()=>{order.push('sync');time+=70}});
  await r.receive({update_type:'message_callback',timestamp:100000,callback:{callback_id:'timed',payload:`poll:${scope.uuid}:yes`,user:{user_id:1234,is_bot:false}},message:{recipient:{chat_type:'chat',chat_id:CHAT},body:{mid:scope.mid}}});
- assert.deepEqual(order,['commit','sync']);assert.equal(logs[0].bridgeUpdateMs,30);assert.equal(logs[0].syncMs,70);assert.equal(logs[0].totalMs,100);
+ assert.deepEqual(order,['commit','sync']);const timing=logs.find(x=>x.event==='fitpp_test_booking');assert.equal(timing.bridgeUpdateMs,30);assert.equal(timing.syncMs,70);assert.equal(timing.totalMs,100);assert.ok(logs.some(x=>x.event==='fitpp_ram_fast_path'&&x.reason==='poll_sync_disabled'));
 });
 test('projection, verification and PUT timings are separated; unchanged background is silent',async()=>{
  let time=0,text='old',reads=0;const logs=[];const api={syncPollText:async value=>{time+=20;if(text===value)return {edited:false,maxVerifyMs:20,maxPutMs:0};time+=40;text=value;return {edited:true,maxVerifyMs:20,maxPutMs:40}}};

@@ -1,10 +1,21 @@
 'use strict';
 const {validateView,render}=require('./fitpp-poll-sync');
+function provisionalSkipReason(view,event,scope,now){
+ validateView(view,scope);
+ if(String(event.callback?.user?.user_id)!==String(scope.user)||event.message?.body?.mid!==scope.mid||String(event.message?.recipient?.chat_id)!==scope.chat||![`poll:${scope.uuid}:yes`,`poll:${scope.uuid}:cancel`].includes(event.callback?.payload))return 'event_scope_invalid';
+ const b=view.optimistic,at=event.callback.timestamp??event.timestamp;
+ if(!b)return 'optimistic_context_missing';
+ if(b.userId!==String(scope.user)||!/^demo-client-[1-4]$/.test(b.clientId||'')||typeof b.name!=='string'||!b.name.trim()||b.name.length>100)return 'optimistic_binding_invalid';
+ if(![b.lastEventAt,b.openedAt,b.closesAt,at].every(Number.isSafeInteger))return 'event_time_invalid';
+ if(event.callback.timestamp!==undefined&&event.timestamp!==undefined&&event.callback.timestamp!==event.timestamp)return 'timestamp_mismatch';
+ if(at<=b.lastEventAt)return 'stale_event';
+ if(at<b.openedAt||now>=b.closesAt||at>now+30000||at<now-86400000)return 'event_outside_window';
+ if((event.callback.payload===`poll:${scope.uuid}:yes`)===view.participants.some(p=>p.clientId===b.clientId))return 'participants_unchanged';
+ return null;
+}
 function provisional(view,event,scope,now){
- validateView(view,scope);if(String(event.callback?.user?.user_id)!==String(scope.user)||event.message?.body?.mid!==scope.mid||String(event.message?.recipient?.chat_id)!==scope.chat||![`poll:${scope.uuid}:yes`,`poll:${scope.uuid}:cancel`].includes(event.callback?.payload))return null;const b=view.optimistic,at=event.callback.timestamp??event.timestamp;
- if(!b||b.userId!==String(scope.user)||!/^demo-client-[1-4]$/.test(b.clientId||'')||typeof b.name!=='string'||!b.name.trim()||b.name.length>100||![b.lastEventAt,b.openedAt,b.closesAt,at].every(Number.isSafeInteger)||at<=b.lastEventAt||at<b.openedAt||now>=b.closesAt||at>now+30000||at<now-86400000||event.callback.timestamp!==undefined&&event.timestamp!==undefined&&event.callback.timestamp!==event.timestamp)return null;
- const desired=event.callback.payload===`poll:${scope.uuid}:yes`,present=view.participants.some(p=>p.clientId===b.clientId);
- if(desired===present)return null;
+ if(provisionalSkipReason(view,event,scope,now))return null;
+ const b=view.optimistic,desired=event.callback.payload===`poll:${scope.uuid}:yes`;
  const participants=view.participants.filter(p=>p.clientId!==b.clientId);if(desired)participants.push({clientId:b.clientId,name:b.name});participants.sort((a,b)=>a.clientId.localeCompare(b.clientId));
  const confirmedText=render({...view,participants},scope);
  return {confirmedText,text:confirmedText.replace('✅ Записано','⏳ Предварительный список')+'\n\n⏳ Изменение ещё не подтверждено FitPP.'};
@@ -30,4 +41,4 @@ function createOptimistic({scope,loadView,api,reconcile,clock=()=>performance.no
  }
  return {run(event,commit,receivedAt=clock()){const job=tail.then(()=>apply(event,commit,receivedAt));tail=job.catch(()=>{});return job}};
 }
-module.exports={createOptimistic,provisional};
+module.exports={createOptimistic,provisional,provisionalSkipReason};

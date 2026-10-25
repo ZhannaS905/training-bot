@@ -17,7 +17,9 @@ return db.runTransaction(async tx=>{
   participants.push({clientId:client.id,name});
  }
  participants.sort((a,b)=>a.clientId.localeCompare(b.clientId));
- return {chat:POLL.chat,mid:POLL.mid,uuid:POLL.uuid,date:POLL.date,location:POLL.location,time:POLL.time,revision:c.revision,participants,...(optimistic?{optimistic:await optimisticContext(tx,db,m,b,scope)}:{})};
+ let optimisticSkipReason;
+ const context=optimistic?await optimisticContext(tx,db,m,b,scope,reason=>{optimisticSkipReason=reason}):null;
+ return {chat:POLL.chat,mid:POLL.mid,uuid:POLL.uuid,date:POLL.date,location:POLL.location,time:POLL.time,revision:c.revision,participants,...(optimistic?{optimistic:context,...(optimisticSkipReason?{optimisticSkipReason}:{})}:{})};
 });
 }
 module.exports={readPollView};

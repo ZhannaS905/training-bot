@@ -1,6 +1,7 @@
 'use strict';
 const {validateView,render}=require('./fitpp-poll-sync');
-const {provisional}=require('./fitpp-optimistic');
+const {provisionalSkipReason}=require('./fitpp-optimistic');
+const contextReasons=new Set(['binding_or_poll_missing','client_binding_invalid','poll_context_invalid','reverse_binding_invalid','booking_version_invalid','client_name_invalid']);
 // One controller per exact poll. RAM is a projection, never a durable inbox.
 function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),log=()=>{},sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
  let ready=false,base=null,generation=0,writeTail=Promise.resolve(),displayTail=Promise.resolve(),refreshFlight=null;
@@ -23,8 +24,12 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
    // must not change the text and cause another MAX PUT.
    const text=render(view(),scope);
    const started=clock();
-   const result=await api.syncPollText(text,{clock});
-   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null,displayQueueMs:Math.round(started-receivedAt),putStartedMs:result.edited&&result.putStartedAt!=null?Math.round(result.putStartedAt-receivedAt):null,maxVerifyMs:result.maxVerifyMs??null,maxPutMs:result.maxPutMs??null});
+   let result;
+   try{result=await api.syncPollText(text,{clock})}catch(error){
+    if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',outcome:'max_failed',edited:false,firstPutMs:null,putStartedMs:null,displayQueueMs:Math.round(started-receivedAt),displayMs:Math.round(clock()-started)});
+    throw error;
+   }
+   if(receivedAt!==undefined)log({event:'fitpp_ram_first_put',outcome:result.edited?'edited':'text_unchanged',edited:result.edited===true,firstPutMs:result.edited?Math.round(clock()-receivedAt):null,displayQueueMs:Math.round(started-receivedAt),putStartedMs:result.edited&&result.putStartedAt!=null?Math.round(result.putStartedAt-receivedAt):null,maxVerifyMs:result.maxVerifyMs??null,maxPutMs:result.maxPutMs??null});
   });
   displayTail=job.catch(()=>{});return job;
  }
@@ -42,12 +47,18 @@ function createRam({scope,loadView,api,now=Date.now,clock=()=>performance.now(),
  }
  function run(event,commit,receivedAt=clock()){
   const id=event.callback.callback_id;
-  if(inflight.has(id))return inflight.get(id);
-  if(inflight.size>=256)throw Error('RAM_BACKPRESSURE');
+  if(inflight.has(id)){log({event:'fitpp_ram_fast_path',used:false,reason:'duplicate_inflight'});return inflight.get(id)}
+  if(inflight.size>=256){log({event:'fitpp_ram_fast_path',used:false,reason:'backpressure'});throw Error('RAM_BACKPRESSURE')}
   const at=event.callback.timestamp??event.timestamp;
   const newest=Math.max(base?.optimistic?.lastEventAt||0,...Array.from(pending.values(),p=>p.at));
   // Reuse the strict binding, time, identity and scope validation of the old path.
-  const fast=ready&&base&&at>newest&&provisional({...base,participants:view().participants},event,scope,now());
+  let reason=!base?'snapshot_missing':!ready?'snapshot_not_ready':null;
+  if(!reason){
+   if(pending.size&&at<=newest)reason='pending_newer_event';
+   else try{reason=provisionalSkipReason({...base,participants:view().participants},event,scope,now())}catch{reason='snapshot_invalid'}
+  }
+  const fast=reason===null;
+  log({event:'fitpp_ram_fast_path',used:fast,reason:reason||'scheduled',...(reason==='optimistic_context_missing'?{contextReason:contextReasons.has(base.optimisticSkipReason)?base.optimisticSkipReason:'unspecified'}:{})});
   generation++;
   // Track even no-op/stale/fallback writes: refresh must never race an unsettled write.
   pending.set(id,{event,at,fast});

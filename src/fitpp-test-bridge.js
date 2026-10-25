@@ -31,6 +31,7 @@ function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,optimisti
  const event={update_type:'message_callback',timestamp:u.timestamp,callback:{callback_id:u.callback.callback_id,user:{user_id:Number(p.user),is_bot:false},payload:u.callback.payload,...(u.callback.timestamp===undefined?{}:{timestamp:u.callback.timestamp})},message:{recipient:{chat_type:'chat',chat_id:p.chat},body:{mid:p.mid}}};
  const started=clock();
  let committed,commitStarted;const commit=async()=>{commitStarted=clock();const result=await signedPost(s,'/bot/update',event,{transport,now});committed=clock();return result};
+ if(!optimistic)log(JSON.stringify({event:'fitpp_ram_fast_path',used:false,reason:s.pollSync?'controller_unavailable':'poll_sync_disabled'}));
  const d=optimistic?await optimistic.run(event,commit,receivedAt):await commit();
 
  // Never render from d.booked: a duplicate may refer to an older revision.

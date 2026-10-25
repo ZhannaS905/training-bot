@@ -1,13 +1,17 @@
-# Separate Training Test deployment only.
+# Separate Training Test deployment only. Direct mode requires explicit approval.
 FROM node:22-bookworm-slim
 WORKDIR /opt/training-test
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-COPY memory-training-test.cjs ./
-COPY src/owner-dialog.js src/api.js src/schedule.js src/memory-test-webhook.js src/test-bot-identity.js src/memory-training-test.js src/test-publication-attempts.js src/fitpp-test-bridge.js src/fitpp-poll-sync.js src/fitpp-optimistic.js src/fitpp-ram.js src/training-startup-diagnostic.js ./src/
+COPY direct-sdk/package.json direct-sdk/package-lock.json ./direct-sdk/
+RUN npm ci --prefix direct-sdk --omit=dev --ignore-scripts --no-audit --no-fund --engine-strict
+COPY memory-training-test.cjs direct-preflight.cjs direct-training-test.cjs ./
+COPY src/ ./src/
+COPY direct-core/ ./direct-core/
 COPY certs/russian-trusted-root-ca.pem ./certs/
 ENV NODE_ENV=production BOT_MODE=test CHAT_IDS=-80345864298680 \
     AUTO_PUBLISH=false TEST_ALLOW_SEND=false TEST_ALLOW_EDIT=false TEST_ALLOW_DELETE=false \
+    FITPP_DIRECT_ENABLED=false FITPP_DIRECT_WRITES_ENABLED=false OWNER_DIALOG_ENABLED=false \
     NODE_EXTRA_CA_CERTS=/opt/training-test/certs/russian-trusted-root-ca.pem
 USER node
 EXPOSE 3000

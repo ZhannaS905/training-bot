@@ -53,3 +53,10 @@ test('contact capability checks auth and separate write permission without widen
  f.auth.currentUser=null;
  await a.rejects(session.contactStore(90,{writeEnabled:()=>true}).bind('79990000000',binding),/STORAGE_REFUSED/);a.equal(f.writes,0);
 });
+test('combined runtime reuses Firebase capability and leaves shared session lifetime to caller',async t=>{
+ const f=fixture(t);let inspected=0,closed=0;
+ const session={contactStore:()=>({inspect:async()=>{inspected++}}),close:async()=>{closed++}};
+ const s=await prepare({...f,sdk:undefined,session});
+ a.equal(inspected,1);a.equal(f.requests.length,1);
+ await s.close();a.equal(closed,0);
+});

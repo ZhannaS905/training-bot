@@ -3,7 +3,7 @@ const {MaxApi}=require('./api');
 const {config}=require('./memory-training-test');
 const {checkTestBotIdentity,identityAccepted}=require('./test-bot-identity');
 const {contactLinking}=require('./contact-linking');
-async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now}={}){
+async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now,session:sharedSession}={}){
  if(env.CONTACT_LINK_ENABLED!=='true'||env.OWNER_DIALOG_ENABLED==='true'||
     !['false','true'].includes(env.CONTACT_LINK_REPLY_ENABLED)||
     !['false','true'].includes(env.CONTACT_LINK_WRITES_ENABLED))throw Error('CONTACT_CONFIG_REFUSED');
@@ -18,7 +18,8 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now}={}){
  const raw=new MaxApi(c.token,fetchImpl);
  const identity=await raw.request('GET','/me');
  if(!identityAccepted(checkTestBotIdentity(identity,c.expectedId)))throw Error('TEST_IDENTITY_REFUSED');
- const session=await sessionModule.connect({env:sessionEnv,sdk});
+ const session=sharedSession||await sessionModule.connect({env:sessionEnv,sdk});
+ const close=sharedSession?async()=>{}:session.close;
  try{
   const store=session.contactStore(identity.user_id,{writeEnabled:()=>env.CONTACT_LINK_WRITES_ENABLED==='true'});
   await store.inspect(); // Read-only transaction: main + registry, no phone output.
@@ -40,8 +41,8 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now}={}){
     await raw.send(String(draft.chatId),{...draft.body,notify:false});
    }
   }
-  return {secret:env.WEBHOOK_SECRET,close:session.close,receive(u){const next=tail.then(()=>receive(u));tail=next.catch(()=>{});return next;}};
- }catch{await session.close();throw Error('CONTACT_PREFLIGHT_REFUSED')}
+  return {secret:env.WEBHOOK_SECRET,close,receive(u){const next=tail.then(()=>receive(u));tail=next.catch(()=>{});return next;}};
+ }catch{await close();throw Error('CONTACT_PREFLIGHT_REFUSED')}
 }
 async function main(options={}){
  const prepared=await prepare(options);

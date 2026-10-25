@@ -21,7 +21,9 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
   // Read-only capability check, no MAX requests and no booking writes.
   await at('POLL_VIEW',()=>bridge.signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid},{transport,now}));
   await at('POLL_TIME',checkTime);
-  return {env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
+  const contact=env.CONTACT_LINK_ENABLED==='true'
+   ?await require('./contact-linking-runtime').prepare({env,sdk,now,session}):null;
+  return {contact,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
  } catch(error){await session.close();throw error}
 }
 module.exports={prepare};

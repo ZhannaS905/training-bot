@@ -1,11 +1,9 @@
 'use strict';
 // Explicit candidate command only. Default entrypoint and Dockerfile are unchanged.
 async function main({env=process.env}={}) {
- const contact=env.CONTACT_LINK_ENABLED==='true';
- if(!contact)require('./src/fitpp-direct-session').settings(env);
+ require('./src/fitpp-direct-session').settings(env);
  const load=require('node:module').createRequire(require('node:path').join(__dirname,'direct-sdk/package.json'));
  const sdk={...load('firebase/app'),...load('firebase/auth'),...load('firebase/firestore')};
- if(contact)return require('./src/contact-linking-runtime').main({env,sdk});
  const prepared=await require('./src/fitpp-direct-runtime').prepare({env,sdk});
  try {
   const server=await require('./src/fitpp-test-bridge').main(prepared);

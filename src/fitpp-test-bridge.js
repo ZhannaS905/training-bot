@@ -47,7 +47,20 @@ function startReconciliation(sync,{schedule=setInterval,cancel=clearInterval,onE
  const timer=sync?schedule(retry,30000):null;if(sync)retry();
  return {run,stop(){stopped=true;if(timer!==null)cancel(timer)}};
 }
-async function main({env=process.env,verify=guardedApi,post=signedPost,makeServer=http.createServer,reconcile=startReconciliation,callbackTransport}={}){
+// Keep contact work on its own queue; group callbacks retain the existing fast path.
+function combinedReceiver({callbacks,contact,owner,clock=()=>performance.now()}) {
+ return {async receive(u){
+  if(u?.message?.recipient?.chat_type==='chat') {
+   if(u.update_type==='message_callback')await callbacks.receive(u,clock());
+   return;
+  }
+  if(contact&&(u?.update_type==='bot_started'||u?.message?.recipient?.chat_type==='dialog')) {
+   await contact.receive(u);return;
+  }
+  if(!contact)await owner.receive(u);
+ }};
+}
+async function main({env=process.env,verify=guardedApi,post=signedPost,makeServer=http.createServer,reconcile=startReconciliation,callbackTransport,contact}={}){
  const {s,c}=await at('CONFIG',()=>({s:settings(env),c:config(env)}));
  const api=await at('MAX_IDENTITY',()=>verify(c,undefined,s.pollSync?{pollScope:s.scope}:{}));
  const owner=ownerDialog(env,c.expectedId);
@@ -59,10 +72,10 @@ async function main({env=process.env,verify=guardedApi,post=signedPost,makeServe
  const loop=reconcile(optimistic?()=>at('BRIDGE_SNAPSHOT',()=>optimistic.refresh()):null,{onError:error=>console.error(format(error).replace('startup refused','reconciliation pending'))});
  const callbacks=receiver(s,{optimistic,...(callbackTransport?{transport:callbackTransport}:{})});
  // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
- const handler=createWebhook({receive:async u=>{await owner.receive(u);await callbacks.receive(u,performance.now())}},c.secret).listeners('request')[0];
+ const handler=createWebhook(combinedReceiver({callbacks,contact,owner}),c.secret).listeners('request')[0];
  const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:env.OWNER_DIALOG_ENABLED!=='true',pollDisplaySync:s.pollSync,pollDisplayReady:optimistic?optimistic.status().ready:null}));void handler(req,res)});
  await at('LISTEN',()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)})).catch(error=>{loop.stop();throw error});
  const stop=()=>{loop.stop();server.close();server.closeIdleConnections?.()};process.once('SIGINT',stop);process.once('SIGTERM',stop);
  console.log('Training Test: verified identity/chat; exact-poll bridge ready; poll display sync '+(s.pollSync?'enabled':'disabled')+'; no poll publication.');return server;
 }
-module.exports={settings,receiver,signedPost,startReconciliation,main};
+module.exports={combinedReceiver,settings,receiver,signedPost,startReconciliation,main};

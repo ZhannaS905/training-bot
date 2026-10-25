@@ -1,4 +1,5 @@
 'use strict';
+const {at,format}=require('./src/fitpp-direct-diagnostic');
 // Explicit read-only check. Never starts the MAX listener or poll synchronizer.
 async function authRead({env=process.env,sdk,now=Date.now}={}) {
  if(env.FITPP_DIRECT_ENABLED!=='false'||env.FITPP_DIRECT_WRITES_ENABLED!=='false'||env.OWNER_DIALOG_ENABLED!=='false')throw Error('PREFLIGHT_FLAGS_REQUIRED');
@@ -16,10 +17,10 @@ async function authRead({env=process.env,sdk,now=Date.now}={}) {
  } finally {await session.close()}
 }
 async function main({env=process.env,authReadOnly=false}={}) {
- if(env.FITPP_DIRECT_WRITES_ENABLED!=='false')throw Error('PREFLIGHT_WRITES_MUST_BE_DISABLED');
- require('./src/fitpp-direct-session').settings(authReadOnly?{...env,FITPP_DIRECT_ENABLED:'true'}:env);
+ await at('FLAGS',()=>{if(env.FITPP_DIRECT_WRITES_ENABLED!=='false')throw Error('PREFLIGHT_WRITES_MUST_BE_DISABLED')});
+ await at('SETTINGS',()=>require('./src/fitpp-direct-session').settings(authReadOnly?{...env,FITPP_DIRECT_ENABLED:'true'}:env));
  const load=require('node:module').createRequire(require('node:path').join(__dirname,'direct-sdk/package.json'));
- const sdk={...load('firebase/app'),...load('firebase/auth'),...load('firebase/firestore')};
+ const sdk=await at('SDK_LOAD',()=>({...load('firebase/app'),...load('firebase/auth'),...load('firebase/firestore')}));
  if(authReadOnly)return authRead({env,sdk});
  const prepared=await require('./src/fitpp-direct-runtime').prepare({env,sdk});
  await prepared.close();
@@ -27,6 +28,6 @@ async function main({env=process.env,authReadOnly=false}={}) {
 if(require.main===module) {
  const args=process.argv.slice(2),authReadOnly=args.length===1&&args[0]==='--auth-read';
  const run=args.length&&!authReadOnly?Promise.reject(Error('PREFLIGHT_ARGUMENTS_REJECTED')):main({authReadOnly});
- run.then(()=>console.log(authReadOnly?'DIRECT_AUTH_READ_PREFLIGHT_OK':'DIRECT_READ_PREFLIGHT_OK')).catch(()=>{console.error('DIRECT_READ_PREFLIGHT_REJECTED');process.exitCode=1});
+ run.then(()=>console.log(authReadOnly?'DIRECT_AUTH_READ_PREFLIGHT_OK':'DIRECT_READ_PREFLIGHT_OK')).catch(error=>{console.error('DIRECT_READ_PREFLIGHT_REJECTED '+format(error));process.exitCode=1});
 }
 module.exports={main,authRead};

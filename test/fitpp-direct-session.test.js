@@ -81,3 +81,45 @@ test('login and cleanup errors cannot expose secrets',async()=>{
  const f=fixture();f.sdk.signInWithEmailAndPassword=async()=>{throw Error('synthetic-password private-token')};f.sdk.signOut=async()=>{throw Error('private-token')};
  await assert.rejects(()=>connect({env:env(),sdk:f.sdk}),e=>e.message==='DIRECT_AUTH_CONNECTION_REJECTED');assert.ok(f.calls.includes('delete'));
 });
+
+const {POLL,USER}=require('../direct-core/src/pilot-policy.cjs');
+const {format}=require('../src/fitpp-direct-diagnostic');
+function fullConfig(){return {...env(),FITPP_DIRECT_WRITES_ENABLED:'false',OWNER_DIALOG_ENABLED:'false',FITPP_POLL_SYNC_ENABLED:'false',FITPP_BRIDGE_ENABLED:'true',FITPP_BRIDGE_HMAC_KEY:'a'.repeat(64),CHAT_IDS:POLL.chat,FITPP_BRIDGE_SCOPE:JSON.stringify({...POLL,user:USER}),FITPP_DIRECT_POLL_OPENED_AT:'1792773455958'}}
+function fullFixture(){
+ const f=fixture(),main=structuredClone(require('../direct-core/fixtures/main.json'));
+ const data={main,bookings:{ownerUid:main.ownerUid,datasetId:'synthetic-v1',schemaVersion:1,entries:{}},bookingClock:{revision:84}};
+ f.sdk.runTransaction=async(_,fn)=>fn({get:async path=>({exists:()=>!!data[path.split('/').pop()],data:()=>data[path.split('/').pop()]}),set:()=>assert.fail('write'),update:()=>assert.fail('write')});
+ return {...f,data};
+}
+test('full preparation succeeds with SDK-shaped transaction snapshots and no writes',async()=>{
+ const f=fullFixture(),s=await prepare({env:fullConfig(),sdk:f.sdk,now:()=>Date.parse('2026-10-25')});await s.close();
+ assert.deepEqual(f.calls,['init','login','logout','terminate','delete']);
+});
+test('deadline reached during login or transaction refuses preparation and closes session',async()=>{
+ for(const stage of ['login','transaction']){
+  const f=fullFixture();let time=Date.parse('2026-10-25');
+  const method=stage==='login'?'signInWithEmailAndPassword':'runTransaction',original=f.sdk[method];
+  f.sdk[method]=async(...args)=>{const result=await original(...args);time=POLL.closesAt;return result};
+  await assert.rejects(()=>prepare({env:fullConfig(),sdk:f.sdk,now:()=>time}),e=>format(e)==='stage=POLL_TIME reason=POLL_CLOSED');
+  assert.deepEqual(f.calls.slice(-3),['logout','terminate','delete']);
+ }
+});
+test('preparation distinguishes bridge settings, metadata, missing documents and denied reads safely',async()=>{
+ for(const mode of ['bridge','metadata','missing','denied','commit','unknown']){
+  const f=fullFixture(),config=fullConfig();let expected;
+  if(mode==='bridge'){config.FITPP_BRIDGE_SCOPE='private-token';expected='stage=BRIDGE_SETTINGS reason=INVALID_JSON'}
+  if(mode==='metadata'){f.data.bookings.schemaVersion=2;expected='stage=POLL_VIEW reason=POLL_VIEW_METADATA'}
+  if(mode==='missing'){delete f.data.bookingClock;expected='stage=POLL_VIEW reason=POLL_VIEW_MISSING'}
+  if(mode==='denied'||mode==='unknown'){f.sdk.runTransaction=async(_,fn)=>fn({get:async()=>{throw Object.assign(Error('private-token bot@example.invalid'),{code:mode==='denied'?'permission-denied':'private-token'})}});expected='stage=READ_MAIN reason='+(mode==='denied'?'permission-denied':'UNKNOWN')}
+  if(mode==='commit'){f.sdk.runTransaction=async()=>{throw Object.assign(Error('private-token'),{code:'unavailable'})};expected='stage=POLL_VIEW reason=unavailable'}
+  await assert.rejects(()=>prepare({env:config,sdk:f.sdk,now:()=>Date.parse('2026-10-25')}),e=>format(e)===expected);
+  if(mode==='bridge')assert.deepEqual(f.calls,[]);else assert.deepEqual(f.calls.slice(-3),['logout','terminate','delete']);
+ }
+});
+test('diagnostics never format arbitrary properties or external text',async()=>{
+ const {at}=require('../src/fitpp-direct-diagnostic');
+ assert.equal(format({stage:'READ_MAIN',reason:'private-token'}),'stage=UNKNOWN reason=UNKNOWN');
+ await assert.rejects(()=>at('private-token',()=>{throw Object.assign(Error('private-token'),{code:'private-token'})}),e=>format(e)==='stage=UNKNOWN reason=UNKNOWN');
+ const f=fixture();f.sdk.signInWithEmailAndPassword=async()=>{throw Object.assign(Error('private-token'),{code:'auth/invalid-credential'})};
+ await assert.rejects(()=>connect({env:env(),sdk:f.sdk}),e=>format(e)==='stage=CONNECT reason=auth/invalid-credential');
+});

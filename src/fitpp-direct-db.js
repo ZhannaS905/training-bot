@@ -1,5 +1,6 @@
 'use strict';
 // SDK supplied by composition root; no SDK import, ADC, credentials or network on import.
+const {at}=require('./fitpp-direct-diagnostic');
 const PREFIX='fitppTestWorkspaces/synthetic-v1/';
 function checkPath(path,write=false){
  const readOnly=['states/main','maxBindings','maxClientBindings','maxPolls'];
@@ -18,7 +19,7 @@ function createDirectDb({sdk,raw,projectId,botUid,ownerUid,validateAuth,writeEna
  const wrap=s=>({exists:s.exists(),data:()=>s.data()});
  const db={doc(path){checkPath(path);return {path,_owner:db,get:async()=>{await auth();return wrap(await sdk.getDocFromServer(sdk.doc(raw,path)))} }},
  async runTransaction(fn){await auth();return sdk.runTransaction(raw,async tx=>{await auth();
-  const seen=new Map(),ctx={get:async ref=>{const s=await tx.get(check(ref));seen.set(ref.path,s.exists());return wrap(s)}};
+  const seen=new Map(),ctx={get:async ref=>{const stage={'states/main':'READ_MAIN','states/bookings':'READ_BOOKINGS','states/bookingClock':'READ_CLOCK'}[ref?.path?.slice(PREFIX.length)];const s=await at(stage,()=>tx.get(check(ref)));seen.set(ref.path,s.exists());return wrap(s)}};
   for(const kind of ['set','update','create'])ctx[kind]=(ref,data)=>{
    const native=check(ref);checkPath(ref.path,true);
    if(!writeEnabled())throw Error('DIRECT_WRITES_DISABLED');

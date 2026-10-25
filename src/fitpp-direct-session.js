@@ -35,6 +35,6 @@ async function connect({env,sdk}) {
   const db=createDirectDb({sdk,raw,projectId:c.projectId,botUid:c.uid,validateAuth,getUid:()=>auth.currentUser?.uid,writeEnabled:()=>env.FITPP_DIRECT_WRITES_ENABLED==='true'});
   // Firebase client SDK owns refresh lifecycle. Never persist or log tokens.
   return {db,close};
- } catch {await close();throw Error('DIRECT_AUTH_CONNECTION_REJECTED')}
+ } catch(error) {await close();const safe=require('./fitpp-direct-diagnostic').mark(error,'CONNECT');safe.message='DIRECT_AUTH_CONNECTION_REJECTED';throw safe}
 }
 module.exports={settings,connect,OWNER_UID};

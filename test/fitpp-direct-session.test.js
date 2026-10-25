@@ -8,6 +8,33 @@ function fixture(uid=OWNER_UID,project='fitpp-test') {
  const sdk={initializeApp:c=>(calls.push('init'),{options:c}),initializeAuth:()=>auth,inMemoryPersistence:{},signInWithEmailAndPassword:async()=>{calls.push('login');return {user}},getFirestore:app=>({app}),signOut:async()=>calls.push('logout'),terminate:async()=>calls.push('terminate'),deleteApp:async()=>calls.push('delete'),doc:(_,p)=>p,getDocFromServer:async()=>({exists:()=>true,data:()=>({})})};
  return {sdk,calls,auth};
 }
+test('auth-read needs no openedAt, scope or HMAC; reads only main and cleans up',async()=>{
+ const {authRead}=require('../direct-preflight.cjs'),f=fixture(),paths=[];
+ f.sdk.doc=(_,path)=>(paths.push(path),path);
+ const config={...env(),FITPP_DIRECT_ENABLED:'false',FITPP_DIRECT_WRITES_ENABLED:'false',OWNER_DIALOG_ENABLED:'false'};
+ await authRead({env:config,sdk:f.sdk,now:()=>Date.parse('2026-10-25')});
+ assert.deepEqual(paths,['fitppTestWorkspaces/synthetic-v1/states/main']);
+ assert.equal(config.FITPP_DIRECT_ENABLED,'false');
+ assert.deepEqual(f.calls,['init','login','logout','terminate','delete']);
+});
+test('auth-read refuses unsafe flags and deadline before login',async()=>{
+ const {authRead}=require('../direct-preflight.cjs');
+ const config={...env(),FITPP_DIRECT_ENABLED:'false',FITPP_DIRECT_WRITES_ENABLED:'false',OWNER_DIALOG_ENABLED:'false'};
+ for(const change of [{FITPP_DIRECT_ENABLED:'true'},{FITPP_DIRECT_WRITES_ENABLED:'true'},{OWNER_DIALOG_ENABLED:'true'},{BOT_MODE:'production'},{FIREBASE_PROJECT_ID:'fitpp-crm'},{AUTO_PUBLISH:'true'},{TEST_ALLOW_EDIT:'true'}]) {
+  const f=fixture();await assert.rejects(()=>authRead({env:{...config,...change},sdk:f.sdk,now:()=>Date.parse('2026-10-25')}));assert.deepEqual(f.calls,[]);
+ }
+ const f=fixture();await assert.rejects(()=>authRead({env:config,sdk:f.sdk,now:()=>Date.parse('2026-10-26T18:00:00Z')}),/POLL_CLOSED/);assert.deepEqual(f.calls,[]);
+});
+test('auth-read cleans up denied or missing reads and expiry during login',async()=>{
+ const {authRead}=require('../direct-preflight.cjs');
+ const config={...env(),FITPP_DIRECT_ENABLED:'false',FITPP_DIRECT_WRITES_ENABLED:'false',OWNER_DIALOG_ENABLED:'false'};
+ for(const mode of ['denied','missing','expired']) {
+  const f=fixture();let reads=0,ticks=0;
+  f.sdk.getDocFromServer=async()=>{reads++;if(mode==='denied')throw Error('denied');return {exists:()=>false}};
+  await assert.rejects(()=>authRead({env:config,sdk:f.sdk,now:()=>Date.parse(mode==='expired'&&ticks++?'2026-10-27':'2026-10-25')}));
+  assert.equal(reads,mode==='expired'?0:1);assert.deepEqual(f.calls.slice(-3),['logout','terminate','delete']);
+ }
+});
 test('disabled, production, other identity and missing credentials refuse before SDK access',async()=>{
  for(const change of [{FITPP_DIRECT_ENABLED:'false'},{FIREBASE_PROJECT_ID:'fitpp'},{FIREBASE_PROJECT_ID:'fitpp-crm'},{FIREBASE_BOT_UID:'other'},{FIREBASE_BOT_PASSWORD:''},{OWNER_DIALOG_ENABLED:'true'},{TEST_ALLOW_SEND:'true'}]) {
   const f=fixture();await assert.rejects(()=>connect({env:{...env(),...change},sdk:f.sdk}));assert.deepEqual(f.calls,[]);

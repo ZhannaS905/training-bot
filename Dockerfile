@@ -16,4 +16,4 @@ ENV NODE_ENV=production BOT_MODE=test CHAT_IDS=-80345864298680 \
 USER node
 EXPOSE 3000
 STOPSIGNAL SIGTERM
-CMD ["node", "/opt/training-test/memory-training-test.cjs"]
+CMD ["node", "/opt/training-test/direct-training-test.cjs"]

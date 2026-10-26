@@ -2,16 +2,47 @@
 
 // Pure, side-effect-free preview of a *new* confirmed subscription deduction.
 // No Firestore writes, MAX calls, or bot-runtime imports.
+const { isDeepStrictEqual } = require('node:util');
 const TEST_BOT_ID = 131384398;
 const CLIENT_ID = 'demo-client-1';
 const EXPECTED_CHAT_ID = 126619382;
 const EXPECTED_USER_ID = 5819064;
 
+const OWNER_UID = 'lLlMAetSG1aEeJSeBl4F4ypydEh2';
+const map = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+function validateState(state) {
+  if (!map(state) || state.ownerUid !== OWNER_UID || state.datasetId !== 'synthetic-v1' ||
+      state.schemaVersion !== 1 || !Number.isSafeInteger(state._fitppRevision) || state._fitppRevision < 0 ||
+      !Array.isArray(state.clients) || !['visits','visitOps','attendanceOps','workouts'].every(k => map(state[k])))
+    throw Error('STATE_REFUSED');
+  const ids = new Set();
+  for (const c of state.clients) {
+    if (!map(c) || typeof c.id !== 'string' || ids.has(c.id) ||
+        (c.subscriptions !== undefined && !Array.isArray(c.subscriptions))) throw Error('STATE_REFUSED');
+    ids.add(c.id);
+  }
+  for (const k of ['visits','visitOps','attendanceOps']) {
+    for (const entries of Object.values(state[k])) {
+      if (!map(entries)) throw Error('STATE_REFUSED');
+      for (const v of Object.values(entries)) {
+        if (k === 'visits' ? !['attended','missed','razov','excused'].includes(v) : !map(v))
+          throw Error('STATE_REFUSED');
+      }
+    }
+  }
+  return state;
+}
+function operationIds(state) {
+  const result = [];
+  for (const k of ['visitOps','attendanceOps']) for (const entries of Object.values(state[k]))
+    for (const op of Object.values(entries)) if (typeof op.operationId === 'string') result.push(op.operationId);
+  return result;
+}
 function findSubscription(state, clientId, subscriptionId) {
   const clients = state?.clients;
   if (!Array.isArray(clients)) return null;
   const matches = clients.filter(c => c?.id === clientId);
-  if (matches.length !== 1) return null;
+  if (matches.length !== 1 || matches[0].archivedAt) return null;
   const subscriptions = matches[0]?.subscriptions;
   if (!Array.isArray(subscriptions)) return null;
   const found = subscriptions.filter(s => s?.id === subscriptionId);
@@ -30,15 +61,13 @@ function validBinding(binding, clientId) {
 function previewDeductions(before, after, binding) {
   // First read is only a baseline; no historical operation may trigger a preview.
   if (!before || !after || !validBinding(binding, CLIENT_ID)) return [];
-  const prior = before.visitOps || {};
+  validateState(before); validateState(after);
+  if (after._fitppRevision !== before._fitppRevision + 1) return [];
+  const prior = before.visitOps;
   const next = after.visitOps || {};
-  const seen = new Set();
   // Prevent a moved/copied historical operation from being interpreted as new.
-  const priorIds = new Set();
-  for (const clients of Object.values(prior)) {
-    const id = clients?.[CLIENT_ID]?.operationId;
-    if (typeof id === 'string') priorIds.add(id);
-  }
+  const priorIds = new Set(operationIds(before));
+  const nextIds = operationIds(after);
   const candidates = [];
   for (const [workoutId, clients] of Object.entries(next)) {
     if (!clients || typeof clients !== 'object' || Array.isArray(clients)) continue;
@@ -47,12 +76,36 @@ function previewDeductions(before, after, binding) {
     if (typeof op.operationId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(op.operationId) ||
         typeof op.subscriptionId !== 'string' || !op.subscriptionId) continue;
     // An existing operation is not new, including after restart or unrelated edits.
-    if (priorIds.has(op.operationId)) continue;
-    if (seen.has(op.operationId)) return []; // ambiguous IDs: fail closed
-    seen.add(op.operationId);
+    if (priorIds.has(op.operationId) || nextIds.filter(id => id === op.operationId).length !== 1) continue;
+    // Corrections, cancellation/replacement and migrated legacy visits are not new attendance.
+    if (before.visits[workoutId]?.[CLIENT_ID] != null || prior[workoutId]?.[CLIENT_ID] != null || op.moneyChargeId) continue;
+    const workout = after.workouts[workoutId];
+    if (!map(workout) || workout.id !== workoutId || workout.cancelled !== false ||
+        op.workoutId !== workoutId || op.location !== workout.location ||
+        !['zarya','pole','online'].includes(op.location) ||
+        typeof workout.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(workout.date) ||
+        !Number.isFinite(Date.parse(workout.date + 'T00:00:00Z')) ||
+        new Date(workout.date + 'T00:00:00Z').toISOString().slice(0,10) !== workout.date) continue;
     const oldSub = findSubscription(before, CLIENT_ID, op.subscriptionId);
     const newSub = findSubscription(after, CLIENT_ID, op.subscriptionId);
     if (!oldSub || !newSub) continue;
+    const oldTerms = {...oldSub}, newTerms = {...newSub};
+    delete oldTerms.left; delete newTerms.left;
+    // The reducer may consume an existing booking thaw alongside the decrement.
+    if (oldTerms.bookingThaw && newTerms.bookingThaw) {
+      oldTerms.bookingThaw = {...oldTerms.bookingThaw, consumed:true};
+    }
+    if (!isDeepStrictEqual(oldTerms,newTerms)) continue;
+    // No other visit or operation for this client may change in this transition.
+    const withoutTarget = state => {
+      const maps = {};
+      for (const k of ['visits','visitOps','attendanceOps']) {
+        maps[k] = Object.fromEntries(Object.entries(state[k]).flatMap(([wid, entries]) =>
+          (wid === workoutId && k !== 'attendanceOps') || entries[CLIENT_ID] === undefined ? [] : [[wid,entries[CLIENT_ID]]]));
+      }
+      return maps;
+    };
+    if (!isDeepStrictEqual(withoutTarget(before),withoutTarget(after))) continue;
     candidates.push({ operationId: op.operationId, workoutId, clientId: CLIENT_ID,
       subscriptionId: op.subscriptionId, remaining: newSub.left, previous: oldSub.left,
       maxChatId: binding.bindings[0].maxChatId });
@@ -65,4 +118,21 @@ function previewDeductions(before, after, binding) {
     item.previous === item.remaining + 1);
 }
 
-module.exports = { previewDeductions, validBinding };
+function createPreviewSession() {
+  let previous = null;
+  const seen = new Set();
+  return { check(state,binding) {
+    validateState(state);
+    if (!map(binding) || binding.version !== 1 || binding.botId !== TEST_BOT_ID ||
+        !Array.isArray(binding.bindings) || binding.bindings.some(row => !map(row) ||
+          typeof row.clientId !== 'string' || !Number.isSafeInteger(row.maxChatId) || row.maxChatId === 0 ||
+          !Number.isSafeInteger(row.maxUserId) || row.maxUserId <= 0 || typeof row.notificationsEnabled !== 'boolean'))
+      throw Error('BINDING_REFUSED');
+    const baseline = previous === null;
+    const candidates = previewDeductions(previous,state,binding).filter(item => !seen.has(item.operationId));
+    for (const id of operationIds(state)) seen.add(id);
+    previous = structuredClone(state);
+    return {baseline,candidates};
+  }};
+}
+module.exports = { previewDeductions, validBinding, validateState, createPreviewSession };

@@ -1,11 +1,13 @@
 --- a/src/attendance.cjs
 +++ b/src/attendance.cjs
-@@ -37,7 +37,7 @@
+@@ -37,7 +37,9 @@
   }
   const receipt={signature,revision:revision+1,trainerUid:uid,at:this.now(),workoutId:w.id,marks:r.marks,timeBypass:bypass};
   const receipts={...(raw.attendanceReceipts||{}),[r.operationId]:receipt};ensure(Object.keys(receipts).length<=500,'RECEIPT_LIMIT');
-- tx.set(this.db.doc(MAIN),{...raw,...next,attendanceRevision:revision+1,attendanceReceipts:receipts});
-+ tx.set(this.db.doc(MAIN),{...raw,...next,_fitppRevision:raw._fitppRevision+1,attendanceRevision:revision+1,attendanceReceipts:receipts});
+- tx.set(this.db.doc(MAIN),{...raw,...next,_fitppRevision:raw._fitppRevision+1,attendanceRevision:revision+1,attendanceReceipts:receipts});
++ // Attendance rules permit attendanceRevision, not the mutation-only _fitppRevision.
++ // Keep the receipt and lesson change atomic; do not cross the two write contracts.
++ tx.set(this.db.doc(MAIN),{...raw,...next,attendanceRevision:revision+1,attendanceReceipts:receipts});
   return {duplicate:false,revision:revision+1};
   })
   }

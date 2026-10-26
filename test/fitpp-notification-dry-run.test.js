@@ -12,7 +12,7 @@ const binding = { version: 1, botId: 131384398, bindings: [{
 }] };
 function state(left, ops = {}, visits = {}) {
   return { ...structuredClone(require('../direct-core/fixtures/main.json')),
-    _fitppRevision: 8-left, clients: [{ id: CLIENT, subscriptions: [{ id: SUB, left }] }], visitOps: ops, visits,
+    _fitppRevision: 90, attendanceRevision: 8-left, clients: [{ id: CLIENT, subscriptions: [{ id: SUB, left }] }], visitOps: ops, visits,
     workouts: { [WORKOUT]: {id:WORKOUT,date:'2026-10-24',location:'online',cancelled:false} } };
 }
 function mark(operationId, status = 'attended') {
@@ -99,9 +99,9 @@ test('session remembers old IDs after cancellation and reappearance', () => {
   const session=createPreviewSession();
   assert.equal(session.check(state(6),binding).baseline,true);
   assert.equal(session.check(state(5,mark('new-operation'),visits()),binding).candidates.length,1);
-  const cancelled=state(6);cancelled._fitppRevision=4;
+  const cancelled=state(6);cancelled.attendanceRevision=4;
   assert.equal(session.check(cancelled,binding).candidates.length,0);
-  const replay=state(5,mark('new-operation'),visits());replay._fitppRevision=5;
+  const replay=state(5,mark('new-operation'),visits());replay.attendanceRevision=5;
   assert.equal(session.check(replay,binding).candidates.length,0);
 });
 test('unknown workout, duplicate IDs, money charge, changed terms and skipped revision do not preview', () => {
@@ -110,7 +110,7 @@ test('unknown workout, duplicate IDs, money charge, changed terms and skipped re
     s=>{s.workouts={};},s=>{s.workouts[WORKOUT].cancelled=true;},
     s=>{s.visitOps[WORKOUT][CLIENT].moneyChargeId='charge';},
     s=>{s.visitOps[WORKOUT].other={operationId:'new-operation'};},
-    s=>{s.clients[0].subscriptions[0].price=100;},s=>{s._fitppRevision+=1;},
+    s=>{s.clients[0].subscriptions[0].price=100;},s=>{s.attendanceRevision+=1;},
     s=>{s.visitOps[WORKOUT][CLIENT].workoutId='other';},
     s=>{s.clients[0].archivedAt='2026-10-24';}
   ]) {const candidate=structuredClone(after);mutate(candidate);assert.deepEqual(previewDeductions(before,candidate,binding),[]);}
@@ -119,13 +119,13 @@ test('real bundled FitPP reducer: deduction, undo and new attendance', () => {
   const store=require('../direct-core/FitPP-Test/persistence.js');
   const before=structuredClone(require('../direct-core/fixtures/main.json'));
   const action={type:'attendance',workoutId:WORKOUT,clientId:CLIENT,status:'attended',date:'2026-10-24',location:'online'};
-  const after=store.reduce(before,action,'2026-10-24');after._fitppRevision=before._fitppRevision+1;
+  const after=store.reduce(before,action,'2026-10-24');after.attendanceRevision=(before.attendanceRevision || 0)+1;
   const session=createPreviewSession();session.check(before,binding);
   const result=session.check(after,binding);assert.equal(result.candidates.length,1);
   assert.equal(result.candidates[0].remaining,before.clients[0].subscriptions[0].left-1);
-  const undone=store.reduce(after,action,'2026-10-24');undone._fitppRevision=after._fitppRevision+1;
+  const undone=store.reduce(after,action,'2026-10-24');undone.attendanceRevision=after.attendanceRevision+1;
   assert.equal(session.check(undone,binding).candidates.length,0);
-  const repeated=store.reduce(undone,action,'2026-10-24');repeated._fitppRevision=undone._fitppRevision+1;
+  const repeated=store.reduce(undone,action,'2026-10-24');repeated.attendanceRevision=undone.attendanceRevision+1;
   assert.equal(session.check(repeated,binding).candidates.length,1);
 });
 
@@ -296,7 +296,7 @@ test('--checks 4 actual CLI exits 0; later HTTP or network error exits 1 with sa
 
 test('diagnostics report skipped revisions and visible operations without changing eligibility', () => {
   const before=state(6),after=state(5,mark('private-operation'),visits());
-  after._fitppRevision=before._fitppRevision+2;
+  after.attendanceRevision=before.attendanceRevision+2;
   after.clients[0].name='PRIVATE_NAME';
   const session=createPreviewSession({diagnose:true});
   const baseline=session.check(before,binding);
@@ -305,8 +305,10 @@ test('diagnostics report skipped revisions and visible operations without changi
   assert.equal(result.candidates.length,0);
   assert.equal(result.diagnostics.beforeRevision,before._fitppRevision);
   assert.equal(result.diagnostics.afterRevision,after._fitppRevision);
+  assert.equal(result.diagnostics.beforeAttendanceRevision,before.attendanceRevision);
+  assert.equal(result.diagnostics.afterAttendanceRevision,after.attendanceRevision);
   assert.equal(result.diagnostics.afterPilotVisitOps,1);
-  assert.equal(result.diagnostics.reasons.REVISION_NOT_PLUS_ONE,1);
+  assert.equal(result.diagnostics.reasons.ATTENDANCE_REVISION_NOT_PLUS_ONE,1);
   assert.doesNotMatch(JSON.stringify(result.diagnostics),/private-operation|PRIVATE_NAME|demo-client|subscription-demo|126619382|5819064/);
   const unchanged=session.check(after,binding);
   assert.equal(unchanged.diagnostics.reasons.OPERATION_ALREADY_IN_BEFORE,1);
@@ -345,9 +347,62 @@ test('--diagnose --checks emits safe diagnostics for baseline and unchanged snap
       .map(line=>JSON.parse(line.slice('FITPP_DRY_RUN_DIAGNOSTIC '.length)));
     assert.equal(diagnostics.length,2);
     assert.equal(diagnostics[0].reasons.BASELINE_ONLY,1);
-    assert.equal(diagnostics[1].reasons.REVISION_NOT_PLUS_ONE,1);
+    assert.equal(diagnostics[1].reasons.ATTENDANCE_REVISION_NOT_PLUS_ONE,1);
     assert.equal(diagnostics[1].reasons.NO_PILOT_VISIT_OPS,1);
     assert.doesNotMatch(lines.join(' '),/fake-secret|fake-key|fake@example|demo-client|126619382|5819064/);
   },snapshotResponse([state(6),state(6)])));
   await assert.rejects(()=>cli.main(env,['--diagnose','--diagnose']),/ARGUMENT_REFUSED/);
+});
+
+test('attendance counter is authoritative; mutation-only and mixed writes cannot preview',()=>{
+  const before=state(6),after=state(5,mark('new-operation'),visits());
+  for(const mutate of [
+    s=>{s.attendanceRevision=before.attendanceRevision;s._fitppRevision++;},
+    s=>{s._fitppRevision++;},s=>{s._fitppRevision--;},
+    s=>{s.attendanceRevision=before.attendanceRevision;},
+    s=>{s.attendanceRevision=before.attendanceRevision-1;},
+    s=>{delete s.attendanceRevision;}
+  ]) {
+    const next=structuredClone(after);mutate(next);
+    const session=createPreviewSession({diagnose:true});session.check(before,binding);
+    assert.deepEqual(session.check(next,binding).candidates,[]);
+    assert.deepEqual(previewDeductions(before,next,binding),[]);
+  }
+  const mixed=structuredClone(after);mixed._fitppRevision++;
+  const session=createPreviewSession({diagnose:true});session.check(before,binding);
+  assert.equal(session.check(mixed,binding).diagnostics.reasons.MAIN_REVISION_CHANGED,1);
+});
+test('malformed attendance revisions refuse baseline, legacy absent counter means zero',()=>{
+  for(const attendanceRevision of [null,-1,1.5,'3',NaN,Infinity,Number.MAX_SAFE_INTEGER+1])
+    assert.throws(()=>createPreviewSession().check({...state(6),attendanceRevision},binding),/STATE_REFUSED/);
+  const before=state(6);delete before.attendanceRevision;
+  const after=state(5,mark('new-operation'),visits());after.attendanceRevision=1;
+  const session=createPreviewSession({diagnose:true});
+  assert.equal(session.check(before,binding).diagnostics.afterAttendanceRevision,0);
+  assert.equal(session.check(after,binding).candidates.length,1);
+});
+test('revision gaps are skipped without catch-up, next sequential new operation can preview',()=>{
+  const session=createPreviewSession({diagnose:true}),before=state(6);
+  session.check(before,binding);
+  const skipped=state(5,mark('skipped-operation'),visits());skipped.attendanceRevision=before.attendanceRevision+2;
+  const gap=session.check(skipped,binding);
+  assert.deepEqual(gap.candidates,[]);
+  assert.equal(gap.diagnostics.reasons.ATTENDANCE_REVISION_NOT_PLUS_ONE,1);
+  assert.deepEqual(session.check(skipped,binding).candidates,[]);
+  const cancelled=state(6);cancelled.attendanceRevision=skipped.attendanceRevision+1;
+  assert.deepEqual(session.check(cancelled,binding).candidates,[]);
+  const replay=state(5,mark('skipped-operation'),visits());replay.attendanceRevision=cancelled.attendanceRevision+1;
+  const repeated=session.check(replay,binding);
+  assert.deepEqual(repeated.candidates,[]);
+  assert.equal(repeated.diagnostics.reasons.OPERATION_SEEN_IN_SESSION,1);
+  cancelled.attendanceRevision=replay.attendanceRevision+1;session.check(cancelled,binding);
+  const fresh=state(5,mark('fresh-operation'),visits());fresh.attendanceRevision=cancelled.attendanceRevision+1;
+  assert.equal(session.check(fresh,binding).candidates.length,1);
+  assert.deepEqual(createPreviewSession().check(fresh,binding).candidates,[]); // Restart is baseline only.
+});
+test('no-op attendance revision and unchanged balance never preview',()=>{
+  const before=state(6),after=structuredClone(before);after.attendanceRevision++;
+  assert.deepEqual(previewDeductions(before,after,binding),[]);
+  after.visitOps=mark('noop-operation');after.visits=visits();
+  assert.deepEqual(previewDeductions(before,after,binding),[]);
 });

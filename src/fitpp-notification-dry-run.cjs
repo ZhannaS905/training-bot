@@ -9,10 +9,13 @@ const EXPECTED_CHAT_ID = 126619382;
 const EXPECTED_USER_ID = 5819064;
 
 const OWNER_UID = 'lLlMAetSG1aEeJSeBl4F4ypydEh2';
+// Legacy documents omit the attendance counter; rules and Pilot treat that as zero.
+const attendanceRevision = state => state.attendanceRevision === undefined ? 0 : state.attendanceRevision;
 const map = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 function validateState(state) {
   if (!map(state) || state.ownerUid !== OWNER_UID || state.datasetId !== 'synthetic-v1' ||
       state.schemaVersion !== 1 || !Number.isSafeInteger(state._fitppRevision) || state._fitppRevision < 0 ||
+      !Number.isSafeInteger(attendanceRevision(state)) || attendanceRevision(state) < 0 ||
       !Array.isArray(state.clients) || !['visits','visitOps','attendanceOps','workouts'].every(k => map(state[k])))
     throw Error('STATE_REFUSED');
   const ids = new Set();
@@ -65,8 +68,13 @@ function previewDeductions(before, after, binding, diagnostics) {
   const bindingOK = validBinding(binding, CLIENT_ID);
   if (!bindingOK) { reject('BINDING_NOT_APPROVED'); if (!diagnostics) return []; }
   validateState(before); validateState(after);
-  const revisionOK = after._fitppRevision === before._fitppRevision + 1;
-  if (!revisionOK) { reject('REVISION_NOT_PLUS_ONE'); if (!diagnostics) return []; }
+  // Never fall back to the mutation counter: attendance writes cannot change it.
+  const attendanceOK = attendanceRevision(after) === attendanceRevision(before) + 1;
+  const mainOK = after._fitppRevision === before._fitppRevision;
+  const revisionOK = attendanceOK && mainOK;
+  if (!attendanceOK) reject('ATTENDANCE_REVISION_NOT_PLUS_ONE');
+  if (!mainOK) reject('MAIN_REVISION_CHANGED');
+  if (!revisionOK && !diagnostics) return [];
   const prior = before.visitOps;
   const next = after.visitOps || {};
   // Prevent a moved/copied historical operation from being interpreted as new.
@@ -145,6 +153,8 @@ function createPreviewSession({ diagnose = false } = {}) {
       .reduce((n, entries) => n + (pilotOnly ? Number(entries[CLIENT_ID] !== undefined) : Object.keys(entries).length), 0) : 0;
     const diagnostics = diagnose ? {
       beforeRevision: previous?._fitppRevision ?? null, afterRevision: state._fitppRevision,
+      beforeAttendanceRevision: previous ? attendanceRevision(previous) : null,
+      afterAttendanceRevision: attendanceRevision(state),
       bindingApproved: validBinding(binding, CLIENT_ID),
       beforeVisitOps: count(previous,'visitOps'), afterVisitOps: count(state,'visitOps'),
       beforeAttendanceOps: count(previous,'attendanceOps'), afterAttendanceOps: count(state,'attendanceOps'),

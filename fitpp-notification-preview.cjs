@@ -69,6 +69,9 @@ async function readBoth(token) {
 async function main(env = process.env, args = process.argv.slice(2), {
   wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 } = {}) {
+  const diagnose = args.includes('--diagnose');
+  if (args.filter(arg => arg === '--diagnose').length > 1) throw Error('ARGUMENT_REFUSED');
+  args = args.filter(arg => arg !== '--diagnose');
   let checks = 1;
   const watch = args.length === 1 && args[0] === '--watch';
   if (watch) checks = Infinity;
@@ -79,14 +82,15 @@ async function main(env = process.env, args = process.argv.slice(2), {
   config(env);
   let token = await signIn(env);
   let expires = Date.now() + 45 * 60 * 1000;
-  const session = createPreviewSession();
+  const session = createPreviewSession({ diagnose });
   const check = async () => {
     if (Date.now() >= expires) {
       token = await signIn(env);
       expires = Date.now() + 45 * 60 * 1000;
     }
     const { main, binding } = await readBoth(token);
-    const {baseline,candidates} = session.check(main,binding);
+    const {baseline,candidates,diagnostics} = session.check(main,binding);
+    if (diagnostics) console.log('FITPP_DRY_RUN_DIAGNOSTIC ' + JSON.stringify(diagnostics));
     if (baseline) {
       console.log('FITPP_DRY_RUN_BASELINE_OK');
     } else {

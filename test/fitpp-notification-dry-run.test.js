@@ -292,3 +292,62 @@ test('--checks 4 actual CLI exits 0; later HTTP or network error exits 1 with sa
     }
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+
+test('diagnostics report skipped revisions and visible operations without changing eligibility', () => {
+  const before=state(6),after=state(5,mark('private-operation'),visits());
+  after._fitppRevision=before._fitppRevision+2;
+  after.clients[0].name='PRIVATE_NAME';
+  const session=createPreviewSession({diagnose:true});
+  const baseline=session.check(before,binding);
+  assert.deepEqual(baseline.diagnostics.reasons,{BASELINE_ONLY:1});
+  const result=session.check(after,binding);
+  assert.equal(result.candidates.length,0);
+  assert.equal(result.diagnostics.beforeRevision,before._fitppRevision);
+  assert.equal(result.diagnostics.afterRevision,after._fitppRevision);
+  assert.equal(result.diagnostics.afterPilotVisitOps,1);
+  assert.equal(result.diagnostics.reasons.REVISION_NOT_PLUS_ONE,1);
+  assert.doesNotMatch(JSON.stringify(result.diagnostics),/private-operation|PRIVATE_NAME|demo-client|subscription-demo|126619382|5819064/);
+  const unchanged=session.check(after,binding);
+  assert.equal(unchanged.diagnostics.reasons.OPERATION_ALREADY_IN_BEFORE,1);
+  assert.equal(unchanged.diagnostics.beforeRevision,after._fitppRevision);
+});
+test('diagnostics identify each operation filter and retain the same preview result', () => {
+  const before=state(6),after=state(5,mark('new-operation'),visits());
+  const cases=[
+    ['NOT_ATTENDED',s=>{s.visitOps[WORKOUT][CLIENT].status='missed';}],
+    ['OPERATION_FIELDS_INVALID',s=>{s.visitOps[WORKOUT][CLIENT].operationId='x';}],
+    ['DUPLICATE_OPERATION_ID',s=>{s.attendanceOps.other={[CLIENT]:{operationId:'new-operation'}};}],
+    ['MONEY_CHARGE',s=>{s.visitOps[WORKOUT][CLIENT].moneyChargeId='PRIVATE';}],
+    ['WORKOUT_MISMATCH',s=>{s.workouts[WORKOUT].cancelled=true;}],
+    ['SUBSCRIPTION_MISSING_AMBIGUOUS_OR_ARCHIVED',s=>{s.clients[0].archivedAt='PRIVATE';}],
+    ['SUBSCRIPTION_TERMS_CHANGED',s=>{s.clients[0].subscriptions[0].price=5;}],
+    ['OTHER_CLIENT_VISITS_CHANGED',s=>{s.visits.other={[CLIENT]:'missed'};}],
+    ['BALANCE_NOT_MINUS_ONE',s=>{s.clients[0].subscriptions[0].left=6;}]
+  ];
+  for (const [reason,mutate] of cases) {
+    const next=structuredClone(after);mutate(next);
+    const session=createPreviewSession({diagnose:true});session.check(before,binding);
+    const result=session.check(next,binding);
+    assert.equal(result.diagnostics.reasons[reason],1,reason);
+    assert.deepEqual(result.candidates,previewDeductions(before,next,binding));
+  }
+  const session=createPreviewSession({diagnose:true});session.check(before,{...binding,bindings:[]});
+  const result=session.check(after,{...binding,bindings:[]});
+  assert.equal(result.diagnostics.reasons.BINDING_NOT_APPROVED,1);
+  assert.deepEqual(result.candidates,[]);
+});
+test('--diagnose --checks emits safe diagnostics for baseline and unchanged snapshot using only test GETs',async()=>{
+  await captureLogs(async lines=>mocked(async calls=>{
+    await cli.main(env,['--diagnose','--checks','2'],{wait:async()=>{}});
+    assert.equal(calls.length,5);
+    const diagnostics=lines.filter(line=>line.startsWith('FITPP_DRY_RUN_DIAGNOSTIC '))
+      .map(line=>JSON.parse(line.slice('FITPP_DRY_RUN_DIAGNOSTIC '.length)));
+    assert.equal(diagnostics.length,2);
+    assert.equal(diagnostics[0].reasons.BASELINE_ONLY,1);
+    assert.equal(diagnostics[1].reasons.REVISION_NOT_PLUS_ONE,1);
+    assert.equal(diagnostics[1].reasons.NO_PILOT_VISIT_OPS,1);
+    assert.doesNotMatch(lines.join(' '),/fake-secret|fake-key|fake@example|demo-client|126619382|5819064/);
+  },snapshotResponse([state(6),state(6)])));
+  await assert.rejects(()=>cli.main(env,['--diagnose','--diagnose']),/ARGUMENT_REFUSED/);
+});

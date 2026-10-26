@@ -1,0 +1,19 @@
+--- a/src/pilot-server.cjs
++++ b/src/pilot-server.cjs
+@@ -3,6 +3,7 @@
+ const {session}=require('./cloud-session.cjs'),{connectCloud}=require('./firestore-cloud.cjs'),{Service,MAIN,BOOKINGS}=require('./service.cjs'),{handle}=require('./max-adapter.cjs'),{verify}=require('./ingress.cjs'),{normalize,USER,POLL}=require('./pilot-policy.cjs'),{prepare}=require('./pilot-provision.cjs');
+ const {connectClient}=require('./firestore-client.cjs');
+ const {readPollView}=require('./poll-view.cjs');
++const {diagnostic}=require('./request-diagnostic.cjs');
+ const secretPath=path.join(__dirname,'../.pilot-secrets.json');
+ let secret;try{secret=JSON.parse(fs.readFileSync(secretPath)).hmac}catch{secret=crypto.randomBytes(32).toString('hex');fs.writeFileSync(secretPath,JSON.stringify({hmac:secret}),{mode:0o600,flag:'wx'})}
+ const auth=session();let enabled=false,poll={...POLL},cloudWrites=0,busy=false,preparing=false;const armAllowed=process.env.FITPP_PILOT_ALLOW_ARM==='true';
+@@ -36,7 +37,7 @@
+ }catch(e){setEnabled(false,'control-error');json(res,400,{error:'CONTROL_REQUEST_FAILED',...status()})}finally{busy=false}});
+ const ingress=http.createServer(async(req,res)=>{if(req.method!=='POST'||!['/bot/update','/bot/poll-view'].includes(req.url)||req.headers.origin)return json(res,404,{error:'NOT_FOUND'});
+ try{const raw=await body(req);verify(secret,req.headers['x-time'],req.url,raw,req.headers['x-signature']);if(!checkSession())throw Error('PILOT_DISABLED');const payload=JSON.parse(raw);if(req.url==='/bot/poll-view'){if(payload.chat!==POLL.chat||payload.mid!==POLL.mid||payload.uuid!==POLL.uuid)throw Error('POLL_SCOPE_REJECTED');if(busy)throw Error('BUSY');busy=true;try{json(res,200,await readPollView(clientDb,poll,{optimistic:payload.optimistic===true}))}finally{busy=false}return;}const event=normalize(payload,poll);if(busy)throw Error('BUSY');busy=true;try{const result=await handle(svc,event);if(result.applied)cloudWrites++;json(res,200,result)}finally{busy=false}}
+-catch(e){json(res,403,{error:'REQUEST_REJECTED'})}});
++catch(e){const entry=diagnostic(e,req.url);console.error(JSON.stringify(entry));json(res,403,{error:'REQUEST_REJECTED',code:entry.code})}});
+ control.listen(8804,'127.0.0.1');ingress.listen(8805,'127.0.0.1');
+ function stop(){setEnabled(false,'process-stop');auth.logout();control.close();ingress.close()};process.on('SIGINT',stop);process.on('SIGTERM',stop);
+ setEnabled(false,'startup');

@@ -1,0 +1,28 @@
+# Allow only runtime source, dependency manifests and the existing CA certificate.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!memory-training-test.cjs
+!direct-preflight.cjs
+!direct-training-test.cjs
+!src/
+!src/**
+!direct-core/
+!direct-core/**
+!direct-sdk/
+!direct-sdk/package.json
+!direct-sdk/package-lock.json
+!certs/
+!certs/russian-trusted-root-ca.pem
+# Never include local credentials, installed dependencies or generated state.
+**/node_modules
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+!certs/russian-trusted-root-ca.pem
+**/*.key
+**/*service-account*.json
+**/*credentials*.json

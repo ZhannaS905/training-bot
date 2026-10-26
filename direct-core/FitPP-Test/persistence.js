@@ -1,0 +1,1182 @@
+/* Account-scoped, confirmed-only persistence. No production migrations on load. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.FitPPStore = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function buildStore(catalogMode) {
+  "use strict";
+  const prices = Object.freeze({ zarya: 700, pole: 600, online: 500 });
+  const fail = (message, code = "invalid") =>
+    Object.assign(new Error(message), { code });
+  const plain = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    (Object.getPrototypeOf(value) === null ||
+      Object.getPrototypeOf(value).constructor?.name === "Object");
+  function copy(value) {
+    if (Array.isArray(value)) return value.map(copy);
+    if (plain(value))
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [k, copy(v)]),
+      );
+    return value; // Preserve Firestore Timestamp/GeoPoint and other SDK values.
+  }
+  function stable(value) {
+    if (Array.isArray(value)) return value.map(stable);
+    if (plain(value))
+      return Object.fromEntries(
+        Object.keys(value)
+          .sort()
+          .map((k) => [k, stable(value[k])]),
+      );
+    return value;
+  }
+  const fingerprint = (data) => JSON.stringify(stable(data));
+  const id = () =>
+    globalThis.crypto?.randomUUID?.() ||
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // Calendar arithmetic uses UTC only as an ordinal; today uses the device's local date.
+  function localDate(now = new Date()) {
+    return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  }
+  function dayNumber(date) {
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '0100-01-01') throw fail('Некорректная дата.');
+    const ms = Date.parse(date + 'T00:00:00Z');
+    if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0,10) !== date) throw fail('Некорректная дата.');
+    return ms / 86400000;
+  }
+  function addDays(date, count) {
+    const result = new Date((dayNumber(date) + count) * 86400000).toISOString().slice(0,10);
+    dayNumber(result);
+    return result;
+  }
+  function validateFreezes(sub) {
+    if (sub.freezes === undefined) return;
+    if (!Array.isArray(sub.freezes) || !Number.isSafeInteger(sub.left) || sub.left < 0) throw fail('Повреждена история заморозок.');
+    dayNumber(sub.expires);
+    let previousEnd = '', expected;
+    for (const f of sub.freezes) {
+      if (!plain(f) || f.version !== 1) throw fail('Неизвестный формат заморозки.');
+      const start = dayNumber(f.start), end = dayNumber(f.end), planned = dayNumber(f.returnDate);
+      dayNumber(f.baseExpires);
+      if (end < start || planned <= start || end > planned || f.start < previousEnd ||
+          f.start > f.baseExpires || (expected && f.baseExpires !== expected)) throw fail('Повреждена история заморозок.');
+      expected = addDays(f.baseExpires, end-start);
+      previousEnd = f.end;
+    }
+    if (expected && sub.expires !== expected) throw fail('Срок не соответствует истории заморозок.');
+  }
+  function frozenOn(sub, date = localDate()) {
+    dayNumber(date);
+    validateFreezes(sub);
+    return (sub.freezes || []).some(f => f.start <= date && date < f.end);
+  }
+  // Presentation only: expires already includes all confirmed/planned freeze extensions.
+  // Subscriptions are shared across the client's halls in the existing data model.
+  function subscriptionWarnings(client, today = localDate()) {
+    dayNumber(today);
+    const subs = client?.subscriptions || [];
+    const display = subs.find(s => s.left > 0) || subs.at(-1);
+    const warnings = [];
+    if (display?.left === 1) warnings.push({key:'balance', kind:'balance', text:'Осталось 1 занятие', title:'Осталось 1 занятие'});
+    const remaining = subs.filter(s => s.left > 0);
+    const candidates = remaining;
+    candidates.forEach(sub => {
+      try {
+        if ((sub.startDate && (dayNumber(sub.startDate), sub.startDate > today)) || frozenOn(sub, today)) return;
+        const days = dayNumber(sub.expires) - dayNumber(today);
+        if (days > 3) return;
+        const text = days < 0 ? 'Абонемент истёк' : days === 0 ? 'Абонемент истекает сегодня' :
+          `Абонемент истекает через ${days} ${days === 1 ? 'день' : 'дня'}`;
+        warnings.push({key:`expiry-${subs.indexOf(sub)}`, kind:days < 0 ? 'expired' : 'soon',
+          text:text + (candidates.length > 1 ? ` · до ${sub.expires}` : ''),
+          title:`Абонемент №${subs.indexOf(sub)+1}, до ${sub.expires}`});
+      } catch (_) { /* Unknown legacy dates/history must not produce a false expiry warning. */ }
+    });
+    return warnings;
+  }
+  function freezeStart(data, clientId, today = localDate()) {
+    dayNumber(today);
+    return ['attended', 'missed', 'razov'].includes(data.attendance?.[today]?.[clientId]) ? addDays(today, 1) : today;
+  }
+  function pendingFreeze(sub, today = localDate()) {
+    dayNumber(today);
+    validateFreezes(sub);
+    return (sub.freezes || []).some(f => today < f.start && f.start < f.end);
+  }
+  function extensionRemaining(sub) {
+    const used = sub.extensionDays ?? 0;
+    if (!Number.isSafeInteger(used) || used < 0 || used > 14) throw fail('Повреждён лимит продления.');
+    return 14 - used;
+  }
+  function subscriptionTitle(sub, today = localDate()) {
+    if (sub?.expires && sub.expires < today) return 'Абонемент истёк';
+    return sub?.left > 0 ? '● Активный абонемент' : 'Нет активного абонемента';
+  }
+  function extendSubscription(data, action, today) {
+    dayNumber(today);
+    const client = clientOf(data, action.clientId);
+    if (client.archivedAt) throw fail('Сначала восстановите клиента из архива.');
+    const sub = client.subscriptions?.[action.subscriptionIndex];
+    if (!Number.isSafeInteger(action.subscriptionIndex) || !sub) throw fail('Абонемент не найден.');
+    dayNumber(sub.expires);
+    if (action.expectedExpires !== sub.expires || action.expectedUsed !== (sub.extensionDays ?? 0)) throw fail('Абонемент изменился. Откройте продление заново.');
+    if (!Number.isSafeInteger(sub.left) || sub.left <= 0) throw fail('Нет оставшихся занятий.');
+    if (frozenOn(sub, today) || pendingFreeze(sub, today)) throw fail('Сначала завершите или отмените заморозку.');
+    if (!Number.isSafeInteger(action.days) || action.days < 1 || action.days > extensionRemaining(sub)) throw fail('Продление: от 1 дня, не более 14 дней суммарно на абонемент.');
+    sub.expires = addDays(sub.expires, action.days);
+    sub.extensionDays = (sub.extensionDays ?? 0) + action.days;
+  }
+  function changeFreeze(data, action, today) {
+    dayNumber(today);
+    const client = clientOf(data, action.clientId);
+    const sub = client.subscriptions?.[action.subscriptionIndex];
+    if (!sub || !Number.isSafeInteger(action.subscriptionIndex)) throw fail('Абонемент не найден.');
+    validateFreezes(sub);
+    dayNumber(sub.expires);
+    if (!Number.isSafeInteger(sub.left) || sub.left <= 0) throw fail('Нет оставшихся занятий.');
+    if(sub.bookingThaw)delete sub.bookingThaw;
+    if (action.type === 'freeze') {
+      if (frozenOn(sub, today) || pendingFreeze(sub, today)) throw fail('Абонемент уже заморожен или заморозка запланирована.');
+      if (sub.startDate && (dayNumber(sub.startDate), sub.startDate > today)) throw fail('Абонемент ещё не начался.');
+      if (today > sub.expires) throw fail('Срок абонемента истёк.');
+      const start = freezeStart(data, client.id, today);
+      if (action.startDate !== undefined && action.startDate !== start) throw fail('Дата начала изменилась. Откройте заморозку заново.');
+      if (start > sub.expires) throw fail('Абонемент истекает до начала заморозки.');
+      const days = dayNumber(action.returnDate) - dayNumber(start);
+      if (days <= 0) throw fail('Возвращение должно быть позже начала заморозки.');
+      const last = sub.freezes?.at(-1);
+      if (last && last.end > start) throw fail('Периоды заморозки пересекаются.');
+      // A pre-existing visit in the new interval would contradict the preserved balance.
+      for (const [date, entries] of Object.entries(data.attendance)) {
+        if (start <= date && date < action.returnDate && ['attended','missed','razov'].includes(entries[client.id]))
+          throw fail('В периоде уже есть списания/отметки. Сначала сверьте журнал.');
+      }
+      const expires = addDays(sub.expires, days);
+      (sub.freezes ||= []).push({version:1, start, returnDate:action.returnDate, end:action.returnDate, baseExpires:sub.expires});
+      sub.expires = expires; // Planned extension; natural return needs no second write.
+    } else {
+      const f = sub.freezes?.at(-1);
+      if (f && pendingFreeze(sub, today)) {
+        sub.expires = f.baseExpires;
+        sub.freezes.pop();
+        return;
+      }
+      if (!f || !frozenOn(sub, today)) throw fail('Нет текущей заморозки.');
+      sub.expires = addDays(f.baseExpires, dayNumber(today)-dayNumber(f.start));
+      f.end = today;
+    }
+  }
+  function bookingFreeze(input,key,desired,entries,notices = []) {
+    const data=read(input),[clientId,date,location]=JSON.parse(key),client=clientOf(data,clientId);
+    dayNumber(date);
+    const changed=[];
+    const alreadyCovered=availableSubscriptions(client,location,date).length>0;
+    const snapshot=sub=>fingerprint(Object.fromEntries(Object.entries(sub).filter(([k])=>k!=='bookingThaw')));
+    for(const sub of client.subscriptions||[]) {
+      const token=sub.bookingThaw;
+      if(token) {
+        if(!plain(token) || token.version!==1 || !Array.isArray(token.keys))throw fail('Повреждена связь записи с заморозкой.');
+        if(desired && date>=token.original.start && date<token.original.end && subscriptionTerms(sub).locations.includes(location)) {
+          if(!token.keys.includes(key))token.keys.push(key);
+          // An earlier booking may shorten the same freeze again, using its original base expiry.
+          if(!token.consumed && snapshot(sub)===token.expected && date<sub.freezes.at(-1).end) {
+            sub.freezes[sub.freezes.length-1].end=date;
+            sub.expires=addDays(token.original.baseExpires,dayNumber(date)-dayNumber(token.original.start));
+            token.expected=snapshot(sub);
+          }
+          changed.push(sub);continue;
+        }
+        if(!desired && token.keys.includes(key)) {
+          token.keys=token.keys.filter(k=>k!==key && entries[k]===true);
+          // Only bookings linked after this freeze may keep its automatic thaw alive.
+          // Older independent entries must not shorten the restored original freeze.
+          const otherBookings=token.keys.filter(k=>{
+            if(k===key||entries[k]!==true)return false;
+            const [cid,d,h]=JSON.parse(k);
+            return cid===clientId && d>=token.original.start && d<token.original.end && subscriptionTerms(sub).locations.includes(h);
+          });
+          const visited=Object.values(data.visitOps).some(day=>Object.values(day).some(op=>op.subscriptionId===sub.id && op.operationId && !token.priorOps.includes(op.operationId)));
+          const restoreBlocked=token.consumed || visited || snapshot(sub)!==token.expected;
+          if(!token.keys.length && !otherBookings.length && !restoreBlocked) {
+            sub.freezes[sub.freezes.length-1]=copy(token.original);sub.expires=token.originalExpires;
+            delete sub.bookingThaw;
+          } else if(otherBookings.length && !token.consumed && !visited && snapshot(sub)===token.expected) {
+            const nextDate=otherBookings.map(k=>JSON.parse(k)[1]).sort()[0];
+            sub.freezes[sub.freezes.length-1].end=nextDate;
+            sub.expires=addDays(token.original.baseExpires,dayNumber(nextDate)-dayNumber(token.original.start));
+            token.keys=otherBookings;token.expected=snapshot(sub);
+          }
+          if(restoreBlocked) {
+            notices.push(token.consumed || visited
+              ? 'Запись отменена. Исходная заморозка не восстановлена: после досрочной разморозки было списание занятия или посещение.'
+              : 'Запись отменена. Исходная заморозка не восстановлена: абонемент изменён после досрочной разморозки.');
+          }
+          changed.push(sub);
+        }
+        continue;
+      }
+      if(!desired || alreadyCovered || sub.cancelledAt || sub.left<=0 || !frozenOn(sub,date) || !subscriptionTerms(sub).locations.includes(location))continue;
+      const f=sub.freezes.at(-1);
+      if(!(f.start<=date && date<f.end))continue;
+      // Do not silently choose among multiple frozen plans.
+      changed.push(sub);
+    }
+    const fresh=changed.filter(s=>!s.bookingThaw && desired && frozenOn(s,date));
+    if(fresh.length>1)throw fail('Несколько замороженных абонементов: сначала выберите и разморозьте нужный в существующей карточке.');
+    for(const sub of fresh) {
+      const original=copy(sub.freezes.at(-1)),originalExpires=sub.expires;
+      const priorOps=Object.values(data.visitOps).flatMap(day=>Object.values(day)).filter(op=>op.subscriptionId===sub.id).map(op=>op.operationId).filter(Boolean);
+      sub.freezes[sub.freezes.length-1].end=date;
+      sub.expires=addDays(original.baseExpires,dayNumber(date)-dayNumber(original.start));
+      sub.bookingThaw={version:1,original,originalExpires,keys:[key],priorOps,consumed:false,expected:snapshot(sub)};
+    }
+    if(changed.length){data._fitppRevision++;return read(data);}
+    return null;
+  }
+  function rentDates(month, hall) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || month < '2026-11' || !['zarya', 'pole'].includes(hall))
+      throw fail('Некорректный месяц или зал аренды.');
+    const [y, m] = month.split('-').map(Number), dates = [];
+    for (let d = 1; d <= new Date(Date.UTC(y, m, 0)).getUTCDate(); d++) {
+      const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      if ((hall === 'zarya' ? [1, 3] : [2, 4]).includes(day)) dates.push(`${month}-${String(d).padStart(2, '0')}`);
+    }
+    return dates;
+  }
+  function validateRent(month, entry) {
+    if (!plain(entry) || entry.version !== 1) throw fail('Неизвестный формат аренды.');
+    for (const hall of ['zarya', 'pole']) {
+      const allowed = rentDates(month, hall), dates = entry[hall];
+      if (!Array.isArray(dates) || new Set(dates).size !== dates.length || dates.some(d => !allowed.includes(d)))
+        throw fail('Некорректные даты аренды.');
+    }
+  }
+  const rentTotal = entry => entry ? entry.zarya.length * 800 + entry.pole.length * 600 : 0;
+
+  // Explicit local-only model. The application never enables this factory.
+  const catalogKeys = (v, keys) => plain(v) && Object.keys(v).every(k=>keys.includes(k)) && keys.every(k=>Object.hasOwn(v,k));
+  const positive = n => Number.isSafeInteger(n) && n > 0;
+  const operationId = v => typeof v === 'string' && /^[a-zA-Z0-9-]{1,80}$/.test(v) && !['constructor','prototype','__proto__'].includes(v);
+  function validateTerms(t) {
+    if(!catalogKeys(t,['name','priceKopecks','sessions','durationDays','locations']) || typeof t.name!=='string' || !t.name.trim() || t.name!==t.name.trim() || t.name.length>80 ||
+      !positive(t.priceKopecks) || t.priceKopecks>10000000000 || !positive(t.sessions) || !positive(t.durationDays) ||
+      !Array.isArray(t.locations) || !t.locations.length || new Set(t.locations).size!==t.locations.length || t.locations.some(h=>!Object.hasOwn(prices,h))) throw fail('Некорректные условия шаблона.');
+  }
+  const termsOf = t => copy(Object.fromEntries(['name','priceKopecks','sessions','durationDays','locations'].map(k=>[k,t[k]])));
+  function defaultPricing() {
+    return {version:1,revision:0,templates:Object.fromEntries(['zarya','pole'].map(h=>['plan-'+h,{id:'plan-'+h,revision:1,name:h==='zarya'?'Заря':'Поле чудес',priceKopecks:h==='zarya'?440000:380000,sessions:8,durationDays:28,locations:Object.keys(prices),archived:false,lastOperationId:'initial',lastOperationKind:'save'}])),singlePrices:{revision:1,zarya:70000,pole:60000,online:50000,lastOperationId:'initial'}};
+  }
+  function validatePricing(c) {
+    if(!catalogKeys(c,['version','revision','templates','singlePrices']) || c.version!==1 || !Number.isSafeInteger(c.revision) || c.revision<0 || !plain(c.templates)) throw fail('Некорректные настройки цен.');
+    for(const [key,t] of Object.entries(c.templates)) {
+      if(!catalogKeys(t,['id','revision','name','priceKopecks','sessions','durationDays','locations','archived','lastOperationId','lastOperationKind']) || !operationId(key) || t.id!==key || !positive(t.revision) || typeof t.archived!=='boolean' || !['save','archive'].includes(t.lastOperationKind) || !operationId(t.lastOperationId)) throw fail('Некорректный шаблон.');
+      validateTerms(termsOf(t));
+    }
+    const v=c.singlePrices;
+    if(!catalogKeys(v,['revision','zarya','pole','online','lastOperationId']) || !positive(v.revision) || !operationId(v.lastOperationId) || Object.keys(prices).some(h=>!positive(v[h]) || v[h]>10000000000)) throw fail('Некорректные разовые цены.');
+  }
+  function pricing(data) { const c=copy(data.pricingSettings ?? defaultPricing());validatePricing(c);return c; }
+  function hasSoldTerms(sub) { return ['termsVersion','terms','templateId','templateRevision','saleOperationId','saleRequest'].some(k=>Object.hasOwn(sub,k)); }
+  function subscriptionTerms(sub) {
+    if(hasSoldTerms(sub)){validSold(sub);return copy(sub.terms);}
+    return {name:sub.location==='zarya' || (!sub.location && sub.price===4400)?'Заря':'Поле чудес',priceKopecks:Number.isFinite(sub.price)&&sub.price>=0?money(sub.price):null,sessions:8,durationDays:28,locations:Object.keys(prices)};
+  }
+  function validateCompatibleData(raw) {
+    if(Object.hasOwn(raw,'pricingSettings'))validatePricing(raw.pricingSettings);
+    for(const c of raw.clients || [])for(const sub of c.subscriptions || [])if(hasSoldTerms(sub))validSold(sub);
+    return raw;
+  }
+  function validSold(sub) {
+    if(sub.termsVersion!==1 || !operationId(sub.templateId) || !positive(sub.templateRevision) || !operationId(sub.saleOperationId) || typeof sub.saleRequest!=='string') throw fail('Некорректный снимок абонемента.');
+    validateTerms(sub.terms);
+    if(typeof sub.id!=='string' || !sub.id || typeof sub.paymentId!=='string' || !sub.paymentId)throw fail('Нет идентификаторов проданного абонемента.');
+    dayNumber(sub.startDate);dayNumber(sub.expires);
+    if(sub.expires<sub.startDate)throw fail('Некорректный срок абонемента.');
+    if(sub.price!==sub.terms.priceKopecks/100 || !Number.isSafeInteger(sub.left) || sub.left<0 || sub.left>sub.terms.sessions) throw fail('Некорректный остаток или цена абонемента.');
+  }
+  function catalogAction(data,a) {
+    const c=pricing(data);
+    if(!operationId(a.operationId))throw fail('Не указан идентификатор операции.');
+    if(a.type==='singlePrices') {
+      if(!catalogKeys(a.prices,Object.keys(prices)))throw fail('Некорректные поля разовых цен.');
+      const current=c.singlePrices;
+      if(current.lastOperationId===a.operationId) {
+        if(Object.keys(prices).some(h=>current[h]!==a.prices?.[h]))throw fail('Повтор с другими условиями.');return data;
+      }
+      if(current.revision!==a.expectedRevision)throw fail('Разовые цены изменены. Обновите данные.','conflict');
+      c.singlePrices={revision:current.revision+1,...a.prices,lastOperationId:a.operationId};
+    } else {
+      if(!operationId(a.templateId))throw fail('Некорректный ID шаблона.');
+      const old=c.templates[a.templateId];
+      if(a.mode==='save' && a.expectedRevision===0 && a.templateId!==a.operationId)throw fail('ID создания должен совпадать с ID операции.');
+      const same=()=>old.lastOperationKind===a.mode && (a.mode==='save'?fingerprint(termsOf(old))===fingerprint(a.terms):old.archived===a.archived);
+      if(old?.lastOperationId===a.operationId){if(!same())throw fail('Повтор с другими условиями.');return data;}
+      if(a.mode==='save') {
+        validateTerms(a.terms);
+        if((old?.revision ?? 0)!==a.expectedRevision)throw fail('Шаблон изменён. Обновите данные.','conflict');
+        c.templates[a.templateId]={id:a.templateId,revision:(old?.revision ?? 0)+1,...copy(a.terms),archived:old?.archived ?? false,lastOperationId:a.operationId,lastOperationKind:'save'};
+      } else if(a.mode==='archive' && old && typeof a.archived==='boolean') {
+        if(old.revision!==a.expectedRevision)throw fail('Шаблон изменён. Обновите данные.','conflict');
+        c.templates[a.templateId]={...old,revision:old.revision+1,archived:a.archived,lastOperationId:a.operationId,lastOperationKind:'archive'};
+      } else throw fail('Некорректная операция шаблона.');
+    }
+    c.revision++;validatePricing(c);data.pricingSettings=c;return data;
+  }
+
+  function read(raw = {}) {
+    const data = {
+      ...(Object.hasOwn(raw,"pricingSettings") ? {pricingSettings:raw.pricingSettings} : {}),
+      ...(Object.hasOwn(raw, "taxPayments") ? {taxPayments:raw.taxPayments} : {}),
+      clients: raw.clients ?? [],
+      attendance: raw.attendance ?? {},
+      finances: raw.finances ?? {},
+      rentMonths: raw.rentMonths ?? {},
+      attendanceOps: raw.attendanceOps ?? {},
+      workouts: raw.workouts ?? {}, visits: raw.visits ?? {}, visitOps: raw.visitOps ?? {}, legacyLinks: raw.legacyLinks ?? {}, legacySources: raw.legacySources ?? {},
+      _fitppRevision: raw._fitppRevision ?? 0,
+    };
+    if (
+      !Array.isArray(data.clients) ||
+      !plain(data.attendance) ||
+      !plain(data.finances) ||
+      !plain(data.rentMonths) ||
+      !plain(data.attendanceOps) || !plain(data.workouts) || !plain(data.visits) || !plain(data.visitOps) || !plain(data.legacyLinks) || !plain(data.legacySources) ||
+      !Number.isSafeInteger(data._fitppRevision) ||
+      data._fitppRevision < 0
+    ) {
+      throw fail(
+        "Неизвестный формат данных. Запись заблокирована, данные не изменены.",
+      );
+    }
+    if (
+      data.clients.some(
+        (c) =>
+          !plain(c) ||
+          !["string", "number"].includes(typeof c.id) ||
+          ["__proto__", "constructor", "prototype"].includes(String(c.id)) ||
+          (c.subscriptions != null && !Array.isArray(c.subscriptions)),
+      ) ||
+      Object.values(data.attendance).some((day) => !plain(day)) ||
+      Object.values(data.finances).some((n) => !Number.isFinite(n))
+    ) {
+      throw fail(
+        "Повреждённые данные. Запись заблокирована, обратитесь к администратору.",
+      );
+    }
+    if (
+      new Set(data.clients.map((c) => String(c.id))).size !==
+      data.clients.length
+    )
+      throw fail(
+        "Повторяющиеся идентификаторы клиентов. Запись заблокирована.",
+      );
+    if(Object.hasOwn(data,"pricingSettings"))validatePricing(data.pricingSettings);
+    validateTaxPayments(data.taxPayments);
+    for (const [month, entry] of Object.entries(data.rentMonths)) validateRent(month, entry);
+    for (const c of data.clients) for (const sub of c.subscriptions || []) {
+      if (!plain(sub)) throw fail("Повреждённый абонемент.");
+      if(hasSoldTerms(sub))validSold(sub);
+      validateFreezes(sub);
+    }
+    for (const c of data.clients) ledger(c);
+    for(const [key,w] of Object.entries(data.workouts)) {
+      if(!plain(w) || w.id!==key || (!regular(w.location,w.originDate) && !(w.legacy===true && schedule[w.location]) && !(w.extra===true && schedule[w.location])) || (w.extra===true ? !new RegExp('^'+w.location+'_extra_[a-zA-Z0-9-]+$').test(key) : key!==w.location+'_'+w.originDate) || typeof w.cancelled!=='boolean' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(w.time)) throw fail('Повреждено расписание.');
+      dayNumber(w.date);dayNumber(w.originDate);
+    }
+    for(const map of [data.visits,data.visitOps]) for(const [key,entries] of Object.entries(map)) {
+      workoutOf(data,key);if(!plain(entries)) throw fail('Повреждены отметки тренировки.');
+    }
+    for(const entries of Object.values(data.visits)) if(Object.values(entries).some(v=>!['attended','missed','razov','excused'].includes(v))) throw fail('Неизвестная отметка.');
+    for(const [key,target] of Object.entries(data.legacyLinks)) {
+      workoutOf(data,target);
+      const source={status:data.attendance[key.slice(0,10)]?.[key.slice(11)] ?? null,op:data.attendanceOps[key.slice(0,10)]?.[key.slice(11)] ?? null};
+      if(fingerprint(source)!==fingerprint(data.legacySources[key])) throw fail('Старые отметки изменены после миграции. Требуется сверка; запись заблокирована.');
+    }
+    return copy(data);
+  }
+  function validateTaxPayments(payments) {
+    if(payments===undefined)return;
+    if(!plain(payments))throw fail('Повреждена история НПД.');
+    for(const [key,p] of Object.entries(payments)) {
+      if(!/^tax-[a-zA-Z0-9-]{1,76}$/.test(key) || !plain(p) || p.id!==key || p.version!==1 ||
+        !Number.isSafeInteger(p.amount) || p.amount<=0 || p.amount>10000000000 ||
+        !/^\d{4}-(0[1-9]|1[0-2])$/.test(p.period) || Object.keys(p).some(k=>!['id','version','amount','paidDate','period'].includes(k)))throw fail('Повреждён налоговый платёж.');
+      dayNumber(p.paidDate);
+    }
+  }
+  function taxTotal(payments, month) {
+    validateTaxPayments(payments);
+    const cents=Object.values(payments||{}).filter(p=>p.paidDate.slice(0,7)===month).reduce((sum,p)=>sum+p.amount,0);
+    if(!Number.isSafeInteger(cents))throw fail('Сумма налога слишком велика.');
+    return cents/100;
+  }
+  // Money history remains in the clients list; financial verification records are separate.
+  function money(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100000000 || Math.abs(value*100-Math.round(value*100)) > 0.000001) throw fail('Укажите сумму в рублях, не более двух знаков после запятой.');
+    return Math.round(value*100);
+  }
+  function moneyState(client) {
+    if (client.money === undefined) return {entries:[],balance:0,charges:new Map()};
+    if (!plain(client.money) || client.money.version !== 1 || !Array.isArray(client.money.entries)) throw fail('Неизвестная денежная история.');
+    let balance=0, previous='', keys=new Set(), seen=new Map(), cancelled=new Set(), charges=new Map();
+    for (const e of client.money.entries) {
+      dayNumber(e.date);
+      if (!plain(e) || typeof e.id!=='string' || keys.has(e.id) || e.date<previous || !['sale','legacy','cancel','refund','visitCharge','debtPayment','visitCancel'].includes(e.kind) || !Number.isSafeInteger(e.received) || !Number.isSafeInteger(e.delta) || !Number.isSafeInteger(e.price) || e.price<0 || !Number.isSafeInteger(e.used) || e.used<0 || !['cash','transfer',null].includes(e.method) || (e.received!==0 && !e.method)) throw fail('Повреждена денежная история.');
+      if(e.kind==='visitCharge') {
+        dayNumber(e.visitDate);
+        if(!Object.hasOwn(prices,e.location) || typeof e.workoutId!=='string' || typeof e.ref!=='string' || !e.ref)throw fail('Нет связи начисления с посещением.');
+        if(e.received!==0 || e.method!==null || e.price<=0 || e.used!==Math.min(balance,e.price) || e.delta!==-e.used)
+          throw fail('Неверное начисление посещения.');
+        charges.set(e.id,{entry:e,remaining:e.price-e.used,paid:0,cancelled:false});
+      }
+      if(e.kind==='debtPayment') {
+        if(e.received<=0 || !['cash','transfer'].includes(e.method) || e.price!==0 || !Array.isArray(e.allocations))throw fail('Неверная оплата долга.');
+        let remaining=e.received, allocated=0;
+        const expected=[];
+        for(const [chargeId,c] of charges) if(!c.cancelled && c.remaining>0 && remaining>0) {
+          const amount=Math.min(remaining,c.remaining);expected.push({chargeId,amount});remaining-=amount;
+        }
+        if(!expected.length || fingerprint(expected)!==fingerprint(e.allocations))throw fail('Неверное погашение долга.');
+        for(const a of e.allocations){const c=charges.get(a.chargeId);c.remaining-=a.amount;c.paid+=a.amount;allocated+=a.amount;}
+        if(e.used!==allocated || e.delta!==e.received-allocated)throw fail('Неверный остаток оплаты.');
+      }
+      if(e.kind==='visitCancel') {
+        const c=charges.get(e.ref);
+        if(!c || c.cancelled || e.received!==0 || e.method!==null || e.price!==c.entry.price || e.used!==0 || e.delta!==c.entry.used+c.paid)
+          throw fail('Неверная отмена денежного посещения.');
+        c.cancelled=true;c.remaining=0;
+      }
+      if ((e.kind==='sale' && (e.received<0 || e.delta!==e.received-e.price || e.used>e.price)) || (e.kind==='legacy' && (e.received!==e.price || e.delta!==0 || e.used!==0)) || (e.kind==='cancel' && (e.received!==0 || e.delta!==e.price)) || (e.kind==='refund' && (e.received>=0 || e.delta!==e.received))) throw fail('Несогласованные денежные движения.');
+      if(['sale','legacy'].includes(e.kind) && !['cash','transfer'].includes(e.method))throw fail('Не указан способ оплаты.');
+      if(e.kind==='sale' && (e.used!==Math.min(balance,e.price) || e.received+e.used<e.price)) throw fail('Неверный зачёт баланса.');
+      if(e.kind==='cancel') {
+        const source=seen.get(e.ref);
+        if(!source || !['sale','legacy'].includes(source.kind) || cancelled.has(e.ref) || e.price!==source.price || e.used!==0 || e.method!==null)throw fail('Неверная отмена оплаты.');
+        cancelled.add(e.ref);
+      }
+      if(e.kind==='refund' && (e.price!==0 || e.used!==0))throw fail('Неверный возврат.');
+      seen.set(e.id,e);
+      balance+=e.delta;
+      if (!Number.isSafeInteger(balance) || balance<0) throw fail('Денежный баланс не может стать отрицательным.');
+      keys.add(e.id);previous=e.date;
+    }
+    return {entries:client.money.entries,balance,charges};
+  }
+  const ledger = client => moneyState(client).entries;
+  const debt = client => [...moneyState(client).charges.values()].reduce((sum,c)=>sum+c.remaining,0)/100;
+  const balance = client => ledger(client).reduce((n,e)=>n+e.delta,0)/100;
+  const rubles = cents => cents/100;
+  function addMoney(data,client,entry,today) {
+    dayNumber(entry.date);
+    if(entry.date>today) throw fail('Оплата будущей датой запрещена.');
+    const entries=ledger(client);
+    if(entry.kind!=='legacy' && entries.length && entry.date<entries.at(-1).date) throw fail('Вносите денежную историю клиента по порядку дат. Более поздние операции уже сохранены.');
+    client.money ||= {version:1,entries:[]};
+    const added={id:id(),...entry};
+    client.money.entries.push(added);
+    client.money.entries.sort((a,b)=>a.date.localeCompare(b.date));ledger(client);
+    if(entry.kind!=='legacy') {
+      const month=entry.date.slice(0,7);
+      data.finances[month]=Math.round(((data.finances[month] || 0)*100+entry.received))/100;
+    }
+    return added.id;
+  }
+  function sell(data,client,action,price,ref,today) {
+    const cost=money(price), available=money(balance(client));
+    if(!['cash','transfer'].includes(action.method)) throw fail('Выберите один способ оплаты: Перевод или Наличные.');
+    const received=money(action.received), used=Math.min(cost,available);
+    if(received+used<cost) throw fail('Недоплата: требуется '+rubles(cost-used)+' ₽. Продажа не сохранена.');
+    return addMoney(data,client,{kind:'sale',date:action.paymentDate || action.date,method:action.method,received,price:cost,used,delta:received-cost,ref,...(action.balanceProofId?{balanceProofId:action.balanceProofId}:{})},today);
+  }
+  function chargeVisit(data,client,action,next,today) {
+    const price=money(catalogMode ? pricing(data).singlePrices[action.location]/100 : prices[action.location]);
+    const used=Math.min(money(balance(client)),price);
+    next.price=price/100;
+    next.singlePriceRevision=catalogMode ? pricing(data).singlePrices.revision : 0;
+    next.moneyChargeId=addMoney(data,client,{kind:'visitCharge',date:today,method:null,received:0,price,used,delta:-used,ref:next.operationId,visitDate:action.date,location:action.location,workoutId:action.workoutId||''},today);
+  }
+  function cancelVisitCharge(data,client,operation,today) {
+    const c=moneyState(client).charges.get(operation.moneyChargeId);
+    if(!c || c.cancelled || c.entry.ref!==operation.operationId)throw fail('Исходное денежное списание не найдено.');
+    addMoney(data,client,{kind:'visitCancel',date:today,method:null,received:0,price:c.entry.price,used:0,delta:c.entry.used+c.paid,ref:c.entry.id},today);
+  }
+  function payDebt(data,action,today) {
+    const client=clientOf(data,action.clientId),state=moneyState(client),received=money(action.received);
+    if(client.archivedAt || received<=0 || !['cash','transfer'].includes(action.method))throw fail('Укажите положительную сумму и способ оплаты для действующего клиента.');
+    let remaining=received;const allocations=[];
+    for(const [chargeId,c] of state.charges)if(!c.cancelled && c.remaining>0 && remaining>0){const amount=Math.min(remaining,c.remaining);allocations.push({chargeId,amount});remaining-=amount;}
+    if(!allocations.length)throw fail('Долг уже погашен. Обновите карточку клиента.');
+    addMoney(data,client,{kind:'debtPayment',date:action.paymentDate,method:action.method,received,price:0,used:received-remaining,delta:remaining,ref:'',allocations},today);
+  }
+  function cancelMoney(data,client,paymentId,today,action) {
+    const e=ledger(client).find(e=>e.id===paymentId);
+    if(!e || !['sale','legacy'].includes(e.kind) || ledger(client).some(x=>x.kind==='cancel'&&x.ref===paymentId)) throw fail('Исходная оплата не найдена или уже отменена.');
+    addMoney(data,client,{kind:'cancel',date:today,method:null,received:0,price:e.price,used:0,delta:e.price,ref:paymentId,...(action.balanceProofId?{balanceProofId:action.balanceProofId}:{})},today);
+  }
+  function report(data,month) {
+    const result={cash:0,transfer:0,cashRefund:0,transferRefund:0,unknown:0,total:data.finances[month]||0};
+    for(const c of data.clients) for(const e of ledger(c)) if(e.date.slice(0,7)===month && e.method) {
+      result[e.method]+=e.received/100;
+      if(e.received<0)result[e.method+'Refund']-=e.received/100;
+    }
+    result.cash=Math.round(result.cash*100)/100;result.transfer=Math.round(result.transfer*100)/100;
+    result.cashRefund=Math.round(result.cashRefund*100)/100;result.transferRefund=Math.round(result.transferRefund*100)/100;
+    result.unknown=Math.round((result.total-result.cash-result.transfer)*100)/100;
+    return result;
+  }
+  function legacyPayments(data,client) {
+    const rows=[];
+    (client.subscriptions||[]).forEach((s,i)=>{if(!s.paymentId && !s.cancelledAt) rows.push({key:'sub:'+i,label:'Абонемент',date:s.startDate,price:s.price,index:i,expected:fingerprint(s)});});
+    for(const [date,entries] of Object.entries(data.attendance)) if(entries[client.id]==='razov' && !data.legacyLinks[date+'/'+client.id]) {
+      const op=data.attendanceOps[date]?.[client.id];
+      if(!op?.paymentId)rows.push({key:'old:'+date,label:'Разовое (старый журнал)',date,price:op?.price,oldDate:date,expected:fingerprint(op||null)});
+    }
+    for(const [key,entries] of Object.entries(data.visits)) if(entries[client.id]==='razov') {
+      const op=data.visitOps[key]?.[client.id];
+      if(!op?.paymentId)rows.push({key:'visit:'+key,label:'Разовое',date:workoutOf(data,key).date,price:op?.price,workoutId:key,expected:fingerprint(op||null)});
+    }
+    return rows.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  }
+  function clientOf(data, clientId) {
+    const client = data.clients.find((c) => c.id === clientId);
+    if (!client)
+      throw fail("Клиент отсутствует в текущем аккаунте. Обновите данные.");
+    return client;
+  }
+  function covers(sub, location, date) {
+    if(hasSoldTerms(sub)) {
+      validSold(sub);
+      return sub.terms.locations.includes(location) && !sub.cancelledAt && sub.left>0 && (!sub.startDate || sub.startDate<=date) && sub.expires>=date && !frozenOn(sub,date);
+    }
+    const hall = sub.location || (sub.price === 4400 ? 'zarya' : sub.price === 3800 ? 'pole' : null);
+    // Both existing plans cover every FitPP location, including legacy records.
+    return ['zarya','pole'].includes(hall) && Object.hasOwn(prices, location) && !sub.cancelledAt && Number.isSafeInteger(sub.left) && sub.left > 0 &&
+      (!sub.startDate || sub.startDate <= date) && sub.expires >= date && !frozenOn(sub, date);
+  }
+  // Array keys also identify legacy subscriptions without assigning IDs on read.
+  // The store revision token protects these keys against concurrent edits/reordering.
+  function availableSubscriptions(client, location, date, restoredId) {
+    return (client?.subscriptions || []).map((sub,index)=>({key:'sub:'+index,sub}))
+      .filter(({sub})=>covers(restoredId && sub.id===restoredId ? {...sub,left:sub.left+1} : sub,location,date));
+  }
+  function attendance(data, action, today) {
+    const {clientId,date,location,status}=action;
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      !Object.hasOwn(prices, location) ||
+      !["attended", "razov", "missed"].includes(status)
+    )
+      throw fail("Некорректная отметка посещения.");
+    dayNumber(date);
+    const client = clientOf(data, clientId);
+    if (client.archivedAt) throw fail('Клиент в архиве. Сначала восстановите его.');
+    if (status==='missed' && client.subscriptions?.some(s => frozenOn(s, today) || frozenOn(s, date)))
+      throw fail('Абонемент заморожен: списание занятий заблокировано.');
+    const day = (data.attendance[date] ||= {});
+    const ops = (data.attendanceOps[date] ||= {});
+    const previous = Object.hasOwn(day, clientId) ? day[clientId] : undefined;
+    if (
+      previous !== undefined &&
+      !["attended", "razov", "missed", "excused"].includes(previous)
+    )
+      throw fail("Неизвестный формат посещения. Запись не изменена.");
+    const operation = ops[clientId];
+    if (["attended", "razov"].includes(previous) || (previous === "missed" && operation?.subscriptionId)) {
+      if (!operation || operation.status !== previous)
+        throw fail(
+          "В старой записи нет исходного абонемента или суммы. Автоматическая отмена небезопасна; нужна сверка истории.",
+          "legacy",
+        );
+      if(previous === "attended" && operation.moneyChargeId) {
+        cancelVisitCharge(data,client,operation,today);
+      } else if (previous === "attended" || previous === "missed") {
+        const matches =
+          client.subscriptions?.filter(
+            (s) => s.id === operation.subscriptionId,
+          ) || [];
+        const sub = matches.length === 1 ? matches[0] : null;
+        if (!sub || !Number.isFinite(sub.left))
+          throw fail("Исходный абонемент не найден. Изменение отменено.");
+        sub.left++;
+      } else {
+        if (!Number.isFinite(operation.price) || operation.price < 0)
+          throw fail("Неизвестна исходная сумма оплаты.");
+        if(!operation.paymentId) throw fail('Сначала уточните старую оплату в карточке клиента.');
+        cancelMoney(data,client,operation.paymentId,today,action);
+      }
+    }
+    if (previous === status) {
+      delete day[clientId];
+      delete ops[clientId];
+      return;
+    }
+    const next = { status, location, operationId: id() };
+    if (status === "attended" || status === "missed") {
+      let candidates = availableSubscriptions(client, location, date);
+      if (action.subscriptionKey !== undefined) candidates=candidates.filter(c=>c.key===action.subscriptionKey);
+      else if (action.subscriptionId) candidates=candidates.filter(c=>c.sub.id===action.subscriptionId);
+      else if (operation?.subscriptionId && candidates.some(c=>c.sub.id===operation.subscriptionId))
+        candidates=candidates.filter(c=>c.sub.id===operation.subscriptionId);
+      if (candidates.length > 1) throw fail('Выберите абонемент для списания занятия.');
+      const sub = candidates[0]?.sub;
+      if (!sub) {
+        if(status==='missed' || action.subscriptionKey!==undefined || action.subscriptionId)throw fail('У клиента нет доступных занятий. Сначала оформите абонемент.');
+        chargeVisit(data,client,action,next,today);
+      } else {
+        sub.id ||= id();
+        next.subscriptionId = sub.id;
+        sub.left--;
+        if(sub.bookingThaw)sub.bookingThaw.consumed=true;
+      }
+    } else if (status === "razov") {
+      next.price = catalogMode ? pricing(data).singlePrices[location]/100 : prices[location];
+      next.paymentId=sell(data,client,action,next.price,next.operationId,today);
+    }
+    day[clientId] = status; // Keep the original string format for existing readers.
+    ops[clientId] = next;
+  }
+  const schedule = {zarya:{days:[1,3],time:'20:00'},pole:{days:[2,4],time:'18:30'},online:{days:[0,6],time:'18:00'}};
+  function regular(hall,date) {
+    dayNumber(date);
+    if (!schedule[hall]?.days.includes(new Date(date+'T00:00:00Z').getUTCDay())) return null;
+    return {id:hall+'_'+date,location:hall,originDate:date,date,time:schedule[hall].time,cancelled:false};
+  }
+  function workoutsOn(data,hall,date) {
+    const base=regular(hall,date), map={...data.workouts};
+    if(base && !map[base.id]) map[base.id]=base;
+    return Object.values(map).filter(w=>w.location===hall && (w.date===date || (!w.cancelled && !w.extra && w.originDate===date))).sort((a,b)=>a.time.localeCompare(b.time));
+  }
+  // 60-minute workouts require a 15-minute break, including across midnight.
+  // Only an online/hall pair with exactly equal starts is exempt.
+  function checkWorkoutConflict(data,w) {
+    if(w.cancelled) return;
+    const start=Date.parse(w.date+'T'+w.time+':00Z'), minimumSeparation=75*60*1000;
+    const rows=new Map();
+    for(const hall of Object.keys(schedule)) for(const offset of [-1,0,1])
+      for(const other of workoutsOn(data,hall,addDays(w.date,offset))) rows.set(other.id,other);
+    const conflict=[...rows.values()].find(other=> {
+      if(other.id===w.id || other.cancelled) return false;
+      const otherStart=Date.parse(other.date+'T'+other.time+':00Z');
+      const onlineHallPair=(other.location==='online')!==(w.location==='online');
+      if(onlineHallPair && start===otherStart) return false;
+      return Math.abs(start-otherStart)<minimumSeparation;
+    });
+    if(conflict) {
+      const names={zarya:'Заря',pole:'Поле чудес',online:'Онлайн'};
+      throw fail('Пересечение или недостаточный перерыв: уже есть тренировка «'+names[conflict.location]+'» '+conflict.date+' в '+conflict.time+'. Каждая тренировка длится 60 минут, затем нужен перерыв минимум 15 минут. Онлайн и зал могут начинаться ровно одновременно. Выберите другое время.');
+    }
+  }
+  function workoutOf(data,key) {
+    const split=key.indexOf('_'), base=data.workouts[key] ? null : regular(key.slice(0,split),key.slice(split+1));
+    const w=data.workouts[key] || base;
+    if(!w || w.id!==key) throw fail('Тренировка не найдена.');
+    return copy(w);
+  }
+  // Legacy records are retained byte-for-byte. Links claim each old mark exactly once.
+  // Migration changes neither balances nor income and is committed with the requested action.
+  function migrate(data) {
+    for(const [date,entries] of Object.entries(data.attendance)) for(const [cid,status] of Object.entries(entries)) {
+      const key=date+'/'+cid;
+      if(data.legacyLinks[key]) continue;
+      const op=data.attendanceOps[date]?.[cid], client=data.clients.find(c=>String(c.id)===cid);
+      const halls=op?.location ? [op.location] : (client?.locations?.length===1 ? client.locations : []);
+      if(halls.length!==1 || !schedule[halls[0]] || (!op?.location && !regular(halls[0],date))) continue;
+      const w=regular(halls[0],date) || {id:halls[0]+'_'+date,location:halls[0],originDate:date,date,time:schedule[halls[0]].time,cancelled:false,legacy:true};
+      if(w.legacy) data.workouts[w.id] ||= w;
+      if(Object.hasOwn(data.visits[w.id] || {},cid)) throw fail('Конфликт старой отметки. Требуется сверка.');
+      (data.visits[w.id] ||= {})[cid]=status;
+      if(op) (data.visitOps[w.id] ||= {})[cid]=copy(op);
+      data.legacyLinks[key]=w.id;
+      data.legacySources[key]=copy({status,op:op ?? null});
+    }
+  }
+  function unresolved(data,cid) {
+    return Object.entries(data.attendance).some(([date,day])=>Object.keys(day).some(c=> (cid===undefined || String(cid)===c) && !data.legacyLinks[date+'/'+c]));
+  }
+  function sessionAction(data,action,today) {
+    migrate(data);
+    if(action.type==='workout' && action.mode==='add') {
+      if(unresolved(data)) throw fail('Есть старые отметки с неоднозначным залом. Сначала требуется сверка журнала.');
+      dayNumber(action.date);
+      if(!schedule[action.location] || !/^([01]\d|2[0-3]):[0-5]\d$/.test(action.time)) throw fail('Некорректный зал или время.');
+      const now=new Date(), stamp=localDate(now)+'T'+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+      if(action.date+'T'+action.time<=stamp) throw fail('Нельзя добавить тренировку в прошлое.');
+      checkWorkoutConflict(data,{location:action.location,date:action.date,time:action.time});
+      if(typeof action.workoutId!=='string' || !new RegExp('^'+action.location+'_extra_[a-zA-Z0-9-]+$').test(action.workoutId) || data.workouts[action.workoutId]) throw fail('Некорректный или повторный номер тренировки.');
+      data.workouts[action.workoutId]={id:action.workoutId,location:action.location,originDate:action.date,date:action.date,time:action.time,cancelled:false,extra:true};
+      return;
+    }
+    const w=workoutOf(data,action.workoutId);
+    if(action.type==='workout') {
+      if(unresolved(data)) throw fail('Есть старые отметки с неоднозначным залом. Сначала требуется сверка журнала.');
+      const locked=Object.keys(data.visits[w.id] || {}).length || Object.keys(data.visitOps[w.id] || {}).length;
+      if(locked) throw fail('У тренировки уже есть отметки или списания. Сначала снимите их с возвратом списаний.');
+      if(action.mode==='delete') {
+        if(!w.extra || !w.cancelled) throw fail('Удалить навсегда можно только отменённую дополнительную тренировку.');
+        if(Object.values(data.legacyLinks).includes(w.id)) throw fail('Тренировка связана со старыми отметками. Удаление запрещено.');
+        delete data.workouts[w.id];delete data.visits[w.id];delete data.visitOps[w.id];return;
+      }
+      const before=copy(w);
+      if(action.mode==='restore') {if(w.extra) throw fail('Дополнительная тренировка не входит в повторяющееся расписание.');w.date=w.originDate;w.time=schedule[w.location].time;w.cancelled=false;}
+      else if(action.mode==='resume') {w.cancelled=false;}
+      else if(action.mode==='cancel') w.cancelled=true;
+      else if(action.mode==='move') {dayNumber(action.date); if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(action.time)) throw fail('Некорректное время.');w.date=action.date;w.time=action.time;w.cancelled=false;}
+      else throw fail('Неизвестное действие.');
+      const now=new Date();
+      if(before.date+'T'+before.time <= localDate(now)+'T'+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')) throw fail('Изменять можно только до начала тренировки.');
+      if(w.date+'T'+w.time <= localDate(now)+'T'+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')) throw fail('Нельзя восстановить или перенести в прошлое.');
+      if(Object.keys(data.visits[w.id] || {}).length || Object.keys(data.visitOps[w.id] || {}).length) throw fail('У тренировки уже есть отметки. Сначала снимите их с возвратом списаний.');
+      checkWorkoutConflict(data,w);
+      data.workouts[w.id]=w;
+      return;
+    }
+    if(unresolved(data,action.clientId)) throw fail('У клиента есть неоднозначные старые отметки. Требуется сверка.');
+    if(w.cancelled || w.date!==action.date || w.location!==action.location) throw fail('Тренировка отменена или перенесена. Обновите расписание.');
+    const prior=data.visits[w.id]?.[action.clientId], priorOp=data.visitOps[w.id]?.[action.clientId];
+    if(prior==='missed' && (!priorOp || priorOp.status!==prior || !priorOp.subscriptionId)) throw fail('У старой отметки «Сгорело» нет исходного абонемента. Требуется сверка; повторное списание заблокировано.','legacy');
+    const legacyAttendance=data.attendance, legacyOps=data.attendanceOps;
+    data.attendance={[w.date]:copy(data.visits[w.id] || {})};
+    data.attendanceOps={[w.date]:copy(data.visitOps[w.id] || {})};
+    attendance(data,action,today);
+    if(data.attendanceOps[w.date]?.[action.clientId]){data.attendanceOps[w.date][action.clientId].workoutId=w.id;if(catalogMode==='catalog' && action.status==='razov')data.attendanceOps[w.date][action.clientId].singlePriceRevision=pricing(data).singlePrices.revision;}
+    data.visits[w.id]=data.attendance[w.date];data.visitOps[w.id]=data.attendanceOps[w.date];
+    data.attendance=legacyAttendance;data.attendanceOps=legacyOps;
+    data.workouts[w.id]=w;
+  }
+  function deletionPlan(data, clientId) {
+    const c = clientOf(data, clientId);
+    if (['attendance','attendanceOps','visits','visitOps'].some(map =>
+      Object.values(data[map]).some(entries => Object.hasOwn(entries, clientId))))
+      throw fail('Есть посещения или отметки журнала. Используйте архив.');
+    if (['legacyLinks','legacySources'].some(map => Object.keys(data[map]).some(key => key.slice(11) === String(clientId))))
+      throw fail('Есть связанные данные старого журнала. Используйте архив.');
+    if (ledger(c).length || (c.subscriptions || []).length)
+      throw fail('Есть абонементы и финансовая история. Используйте архив.');
+    return {};
+  }
+  function reduce(input, action, today = localDate()) {
+    const data = copy(input);
+    if(!catalogMode && (['initializePricing','template','singlePrices'].includes(action.type) || (action.type==='subscription' && Object.hasOwn(action,'templateId'))))throw fail('Конструктор выключен в рабочем режиме.');
+    if(catalogMode && action.type==='initializePricing'){if(Object.hasOwn(data,'pricingSettings'))return data;data.pricingSettings=defaultPricing();return data;}
+    if(catalogMode==='catalog' && ['template','singlePrices'].includes(action.type) && !Object.hasOwn(data,'pricingSettings'))throw fail('Сначала инициализируйте каталог.');
+    if(catalogMode && ['template','singlePrices'].includes(action.type))return catalogAction(data,action);
+    if (action.type==='debtPayment') {
+      payDebt(data,action,today);
+    } else if (action.type==='refund') {
+      const c=clientOf(data,action.clientId), amount=money(action.received);
+      if(!['cash','transfer'].includes(action.method)||amount<=0||amount>money(balance(c))) throw fail('Возврат должен быть больше нуля и не превышать баланс.');
+      addMoney(data,c,{kind:'refund',date:action.date,method:action.method,received:-amount,price:0,used:0,delta:-amount,ref:'',...(action.balanceProofId?{balanceProofId:action.balanceProofId}:{})},today);
+    } else if(action.type==='classifyLegacy') {
+      const c=clientOf(data,action.clientId), row=legacyPayments(data,c).find(r=>r.key===action.key);
+      if(!row || row.expected!==action.expected || !['cash','transfer'].includes(action.method))throw fail('Старая запись изменилась или способ оплаты не выбран.');
+      dayNumber(row.date);const price=money(row.price);
+      if(price<=0)throw fail('Исходная сумма неизвестна. Автоматическая сверка невозможна.');
+      const month=row.date.slice(0,7), totals=report(data,month);
+      if(money(Math.max(0,totals.unknown))<price)throw fail('Сумма превышает нераспределённый доход месяца. Нужна сверка общего итога.');
+      const paymentId=addMoney(data,c,{kind:'legacy',date:row.date,method:action.method,received:price,price,used:0,delta:0,ref:row.key},today);
+      if(row.index!==undefined) {c.subscriptions[row.index].id ||= id();c.subscriptions[row.index].paymentId=paymentId;}
+      else {
+        const entries=row.workoutId ? (data.visitOps[row.workoutId] ||= {}) : (data.attendanceOps[row.oldDate] ||= {});
+        // Missing original amount is never guessed; only known operations reach here.
+        entries[c.id].paymentId=paymentId;
+      }
+    } else if (action.type==='linkLegacy') {
+      dayNumber(action.date); const key=action.date+'/'+action.clientId;
+      const w=schedule[action.location] && (regular(action.location,action.date) || {id:action.location+'_'+action.date,location:action.location,originDate:action.date,date:action.date,time:schedule[action.location].time,cancelled:false,legacy:true}), status=data.attendance[action.date]?.[action.clientId];
+      if(!w || !['attended','missed','razov','excused'].includes(status) || data.legacyLinks[key] || Object.hasOwn(data.visits[w.id] || {},action.clientId)) throw fail('Нельзя связать старую отметку.');
+      const op=data.attendanceOps[action.date]?.[action.clientId];
+      if(op?.location && op.location!==w.location) throw fail('Зал противоречит исходной операции.');
+      if(w.legacy) data.workouts[w.id] ||= w;
+      (data.visits[w.id] ||= {})[action.clientId]=status;
+      if(op) (data.visitOps[w.id] ||= {})[action.clientId]=copy(op);
+      data.legacyLinks[key]=w.id;
+      data.legacySources[key]=copy({status,op:op ?? null});
+    }
+    else if (action.type==='workout' || (action.type==='attendance' && action.workoutId)) sessionAction(data,action,today);
+    else if (action.type === 'extendSubscription') extendSubscription(data, action, today);
+    else if (['freeze', 'unfreeze'].includes(action.type)) {
+      const original=data.attendance;
+      data.attendance=copy(original);
+      for(const key of Object.keys(data.legacyLinks)) delete data.attendance[key.slice(0,10)]?.[key.slice(11)];
+      for(const [key,entries] of Object.entries(data.visits)) {
+        const w=workoutOf(data,key);
+        for(const [cid,status] of Object.entries(entries)) (data.attendance[w.date] ||= {})[cid]=status;
+      }
+      changeFreeze(data, action, today); data.attendance=original;
+    }
+    else if (action.type === 'rentMonth') {
+      const entry = { version: 1, zarya: action.zarya, pole: action.pole };
+      validateRent(action.month, entry);
+      (data.rentMonths ||= {})[action.month] = copy(entry);
+    } else if (action.type === "attendance") {
+      if(Object.keys(data.visits).length || Object.keys(data.workouts).length || Object.keys(data.legacyLinks).length) throw fail('Выберите конкретную тренировку.');
+      attendance(data, action, today);
+    }
+    else if (action.type === "client") {
+      const { name, phone, locations } = action.form;
+      if (
+        typeof name !== "string" ||
+        !name.trim() ||
+        typeof phone !== "string" ||
+        !Array.isArray(locations) ||
+        locations.some((loc) => !Object.hasOwn(prices, loc))
+      )
+        throw fail("Укажите имя и корректные локации клиента.");
+      if (action.editingId != null)
+        Object.assign(clientOf(data, action.editingId), {
+          name: name.trim(),
+          phone,
+          locations: [...locations],
+        });
+      else
+        data.clients.push({
+          id: action.newId || id(),
+          name: name.trim(),
+          phone,
+          locations: [...locations],
+        });
+    } else if (['archiveClient','restoreClient'].includes(action.type)) {
+      const c = clientOf(data,action.clientId);
+      if (action.confirmName !== c.name) throw fail('Подтвердите имя клиента.');
+      if (action.type === 'archiveClient') c.archivedAt = today;
+      else delete c.archivedAt;
+    } else if (action.type === "deleteClient") {
+      const c = clientOf(data,action.clientId);
+      if (action.confirmName !== c.name || action.confirmPhrase !== 'УДАЛИТЬ НАВСЕГДА')
+        throw fail('Удаление не подтверждено.');
+      deletionPlan(data, c.id);
+      for (const map of ['attendance','attendanceOps','visits','visitOps'])
+        for (const entries of Object.values(data[map])) delete entries[c.id];
+      for (const map of ['legacyLinks','legacySources'])
+        for (const key of Object.keys(data[map])) if (key.slice(11) === String(c.id)) delete data[map][key];
+      data.clients = data.clients.filter((item) => item.id !== c.id);
+    } else if (action.type === 'deleteRentMonth') {
+      if (!Object.hasOwn(data.rentMonths, action.month)) throw fail('Месяц аренды отсутствует.');
+      delete data.rentMonths[action.month];
+    } else if (action.type === 'taxPayment') {
+      if(!/^tax-[a-zA-Z0-9-]{1,76}$/.test(action.paymentId))throw fail('Неверный номер налогового платежа.');
+      const previous=data.taxPayments?.[action.paymentId];
+      if(action.expected!==fingerprint(previous||null))throw fail('Налоговый платёж изменился. Обновите данные.');
+      if(action.mode==='delete') {
+        if(!previous)throw fail('Налоговый платёж не найден.');
+        delete data.taxPayments[action.paymentId];
+      } else if(action.mode==='save') {
+        dayNumber(action.paidDate);
+        if(action.paidDate>today)throw fail('Нельзя записать будущую оплату налога.');
+        const payment={id:action.paymentId,version:1,amount:money(action.amount),paidDate:action.paidDate,period:action.period};
+        validateTaxPayments({[action.paymentId]:payment});
+        (data.taxPayments ||= {})[action.paymentId]=payment;
+      } else throw fail('Неизвестная операция НПД.');
+    } else if (action.type === 'financeMonth') {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(action.month) || !Number.isFinite(action.amount) || action.amount < 0 || action.amount > 100000000) throw fail('Некорректная сумма месяца.');
+      if(data.clients.some(c=>ledger(c).some(e=>e.date.slice(0,7)===action.month))) throw fail('Месяц содержит денежные операции. Прямая замена итога запрещена.');
+      const actual = data.finances[action.month] ?? 0;
+      if (action.expected !== actual) throw fail('Финансы изменились. Обновите данные.');
+      if (action.remove) {
+        if(actual !== 0) throw fail('Удалить можно только нулевой итог месяца.');
+        delete data.finances[action.month];
+      } else data.finances[action.month] = action.amount;
+    } else if (['editSubscription','cancelSubscription'].includes(action.type)) {
+      const c=clientOf(data,action.clientId), sub=c.subscriptions?.find(s=>s.id===action.subscriptionId);
+      if(!sub || fingerprint(sub)!==action.expected) throw fail('Абонемент изменился. Откройте заново.');
+      const linked = [data.attendanceOps,data.visitOps].some(map=>Object.values(map).some(entries=>Object.values(entries).some(op=>op.subscriptionId===sub.id)));
+      if(sub.cancelledAt)throw fail('Продажа уже отменена.');
+      if(sub.left!==(hasSoldTerms(sub) ? (validSold(sub),sub.terms.sessions) : 8) || linked || sub.freezes?.length || sub.extensionDays) throw fail('Изменять или отменять можно только неиспользованный абонемент без заморозок и продлений.');
+      dayNumber(sub.startDate);
+      if(action.type==='cancelSubscription') {
+        if(!sub.paymentId)throw fail('Сначала уточните способ старой оплаты.');
+        cancelMoney(data,c,sub.paymentId,today,action);sub.left=0;sub.cancelledAt=today;
+      } else {
+        if(!sub.paymentId || action.price!==sub.price)throw fail('Изменение цены отключено. Для исправления оплаты отмените продажу и оформите заново.');
+        dayNumber(action.date);sub.startDate=action.date;sub.expires=addDays(action.date,hasSoldTerms(sub) ? sub.terms.durationDays : 28);
+      }
+    } else if (action.type === "subscription") {
+      const client = clientOf(data, action.clientId);
+      if (client.archivedAt) throw fail('Клиент в архиве. Сначала восстановите его.');
+      let template=null;
+      if(catalogMode && action.templateId!==undefined) {
+        template=pricing(data).templates[action.templateId];
+        if(!operationId(action.operationId))throw fail('Не указан ID продажи.');
+        const previous=data.clients.flatMap(c=>c.subscriptions || []).find(s=>s.saleOperationId===action.operationId);
+        if(previous) {
+          if(!client.subscriptions.includes(previous) || previous.saleRequest!==fingerprint(Object.fromEntries(Object.entries(action).filter(([key])=>key!=='balanceProofId'))))throw fail('Повтор продажи с другими условиями.');
+          return data;
+        }
+        if(!template || template.archived || template.revision!==action.expectedTemplateRevision)throw fail('Шаблон изменён или в архиве. Обновите данные.','conflict');
+      }
+      const legacyOperation=!template && action.templateId===undefined && action.operationId!==undefined;
+      if(legacyOperation){
+        if(!operationId(action.operationId))throw fail('Не указан ID обычной продажи.');
+        const previous=data.clients.flatMap(c=>c.subscriptions || []).find(s=>s.saleOperationId===action.operationId);
+        if(previous){
+          if(!client.subscriptions.includes(previous) || previous.saleRequest!==fingerprint(Object.fromEntries(Object.entries(action).filter(([key])=>key!=='balanceProofId'))))throw fail('Повтор обычной продажи с другими условиями.');
+          return data;
+        }
+      }
+      if (
+        (!template && !["zarya", "pole"].includes(action.subscriptionType)) ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(action.date)
+      )
+        throw fail("Некорректный абонемент.");
+      const price = template ? template.priceKopecks/100 : action.subscriptionType === "zarya" ? 4400 : 3800;
+      const date = new Date(action.date + "T00:00:00Z");
+      if (
+        !Number.isFinite(date.getTime()) ||
+        date.toISOString().slice(0, 10) !== action.date
+      )
+        throw fail("Некорректная дата.");
+      date.setUTCDate(date.getUTCDate() + (template ? template.durationDays : 28));
+      if(template && (!Number.isFinite(date.getTime()) || date.toISOString().slice(0,10).length!==10))throw fail('Срок вне допустимого календаря.');
+      const subId=template || legacyOperation ? 'subscription-'+action.operationId : id();
+      const paymentId=sell(data,client,action,price,subId,today);
+      (client.subscriptions ||= []).push({
+        id: subId,paymentId,...(template ? {termsVersion:1,templateId:template.id,templateRevision:template.revision,saleOperationId:action.operationId,saleRequest:fingerprint(Object.fromEntries(Object.entries(action).filter(([key])=>key!=='balanceProofId'))),terms:termsOf(template)} : {location: action.subscriptionType,...(legacyOperation?{termsVersion:1,templateId:'legacy-'+action.subscriptionType,templateRevision:1,saleOperationId:action.operationId,saleRequest:fingerprint(Object.fromEntries(Object.entries(action).filter(([key])=>key!=='balanceProofId'))),terms:subscriptionTerms({location:action.subscriptionType,price})}:{})}),
+        left: template ? template.sessions : 8,
+        startDate: action.date,
+        expires: date.toISOString().slice(0, 10),
+        price,
+      });
+      if (action.visit) {
+        const visit = {...action.visit, type:'attendance', clientId:client.id, status:'attended'};
+        migrate(data);
+        const w = workoutOf(data,visit.workoutId);
+        if(w.cancelled || w.date!==visit.date || w.location!==visit.location || unresolved(data,client.id))
+          throw fail('Тренировка изменилась или есть неоднозначные отметки. Покупка не сохранена; обновите журнал.');
+        if(data.visits[w.id]?.[client.id]) throw fail('Отметка уже существует. Покупка не сохранена; обновите журнал.');
+        const sub=client.subscriptions.find(s=>s.id===subId);
+        if(covers(sub,w.location,w.date)) sessionAction(data,{...visit,subscriptionId:subId},today);
+      }
+
+    } else throw fail("Неподдерживаемая операция.");
+    return data;
+  }
+  function create({ db, auth, workspace, clock = localDate, beforeWrite }) {
+    if(catalogMode && !(catalogMode==='catalog' && workspace?.production===false && workspace?.testWorkspace===true && workspace?.projectId==='fitpp-test' && globalThis.FitPPRuntime?.mode==='test-workspace-ui' && workspace?.catalogEnabled===true && typeof workspace.requireCatalog==='function'))throw fail('Производственная модель каталога выключена или адаптер не подтверждён.');
+    if (!workspace && db.offline !== true) throw fail('Требуется защищённый адаптер workspace.');
+    const reference = uid => workspace ? workspace.reference() : db.collection('trainers').doc(uid);
+    const validateSnapshot = snap => {
+      if (!workspace) return;
+      workspace.check();
+      if (!snap.exists) throw fail('База не инициализирована');
+      workspace.validate(snap.data());
+    };
+    let epoch = 0,
+      loadId = 0,
+      notify = () => {},
+      unsubscribe,
+      baseline = null;
+    let state = {
+      ...read(),
+      currentUser: null,
+      sessionEpoch: epoch,
+      dataReady: false,
+      loading: false,
+      saving: false,
+      syncError: "",
+      saveStatus: "",
+    };
+    // UI-only lifetime: a previous callback must never clear a newer notice.
+    let statusTimer = null, statusGeneration = 0;
+    const publish = (patch) => {
+      const replacesNotice = Object.prototype.hasOwnProperty.call(patch, 'saveStatus') ||
+        patch.saving === true || Boolean(patch.syncError);
+      if (replacesNotice) {
+        ++statusGeneration;
+        if (statusTimer !== null) clearTimeout(statusTimer);
+        statusTimer = null;
+      }
+      state = { ...state, ...patch };
+      if (state.saving || state.syncError) state.saveStatus = '';
+      if (replacesNotice && state.saveStatus) {
+        const generation = statusGeneration;
+        statusTimer = setTimeout(() => {
+          if (generation !== statusGeneration) return;
+          statusTimer = null;
+          publish({ saveStatus: '' });
+        }, 3000);
+      }
+      notify(state);
+    };
+    const token = () => ({
+      epoch,
+      uid: state.currentUser?.uid,
+      revision: baseline && fingerprint(baseline),
+    });
+    function valid(t) {
+      return (
+        t &&
+        t.epoch === epoch &&
+        t.uid === state.currentUser?.uid &&
+        t.uid === auth.currentUser?.uid
+      );
+    }
+    function reset(user, preserveData = false) {
+      // Optional tax history must not survive logout or loading another snapshot.
+      delete state.taxPayments;
+      delete state.pricingSettings;
+      epoch++;
+      loadId++;
+      baseline = null;
+      publish({
+        ...(preserveData ? {} : read()),
+        currentUser: user,
+        authWarning: auth.persistenceWarning || '',
+        sessionEpoch: epoch,
+        dataReady: false,
+        loading: false,
+        saving: false,
+        syncError: "",
+        saveStatus: "",
+      });
+    }
+    async function load({preserveData = false} = {}) {
+      if (state.saving) return false;
+      const user = auth.currentUser;
+      if (!user || user.uid !== state.currentUser?.uid) {
+        reset(user || null);
+        return false;
+      }
+      // A reload invalidates every open form/reference, not just the document snapshot.
+      reset(user, preserveData);
+      const t = token(),
+        request = ++loadId;
+      publish({ loading: true });
+      try {
+        const snap = await reference(t.uid).get({ source: "server" });
+        validateSnapshot(snap);
+        if (!valid(t) || request !== loadId) return false;
+        if (snap.metadata?.fromCache)
+          throw fail("Нет подтверждённых данных сервера. Повторите загрузку.");
+        baseline = read(snap.exists ? snap.data() : {});
+        publish({ ...copy(baseline), dataReady: true, loading: false });
+        return true;
+      } catch (error) {
+        if (valid(t) && request === loadId)
+          publish({
+            loading: false,
+            dataReady: false,
+            syncError:
+              "Не удалось загрузить данные. Запись заблокирована. " +
+              error.message,
+          });
+        return false;
+      }
+    }
+    async function run(action, expected) {
+      const t = expected || token();
+      if (state.saving) return false;
+      if (
+        !valid(t) ||
+        !state.dataReady ||
+        state.loading ||
+        state.saving ||
+        !baseline ||
+        t.revision !== fingerprint(baseline)
+      ) {
+        publish({
+          syncError:
+            "Операция недоступна. Дождитесь загрузки или обновите данные текущего аккаунта.",
+          saveStatus: "",
+        });
+        return false;
+      }
+      const base = copy(baseline),
+        frozen = copy(action);
+      const operationDay = clock();
+      try { reduce(base, frozen, operationDay); }
+      catch(error) {publish({syncError:'Не сохранено. '+error.message,saveStatus:''});return false;}
+      publish({ saving: true, syncError: "", saveStatus: "" });
+      try {
+        if(catalogMode && ((frozen.type==='subscription' && frozen.templateId!==undefined) || (frozen.type==='attendance' && frozen.status==='razov')))await workspace.requireCatalog();
+        const ref = reference(t.uid);
+        if (workspace && !workspace.local) {
+          if (!beforeWrite) throw fail('Нет хранилища резервных копий. Запись заблокирована.');
+          const snapshot = await ref.get({source:'server'});
+          validateSnapshot(snapshot);
+          if (!valid(t) || fingerprint(read(snapshot.data())) !== fingerprint(base))
+            throw fail('Данные сервера изменились. Обновите их перед повтором.', 'conflict');
+          await beforeWrite(snapshot.data());
+          if(workspace.prepareWrite && ['subscription','attendance','refund','cancelSubscription'].includes(frozen.type))Object.assign(frozen,await workspace.prepareWrite(snapshot.data(),frozen));
+          if (!valid(t)) throw fail('Сессия изменилась.', 'session');
+        }
+        const committed = await db.runTransaction(async (tx) => {
+          if (!valid(t))
+            throw fail("Аккаунт изменился. Операция отменена.", "session");
+          if (clock() !== operationDay) throw fail("Дата изменилась. Повторите операцию после обновления.");
+          const snap = await tx.get(ref);
+          if (clock() !== operationDay) throw fail("Дата изменилась. Повторите операцию после обновления.");
+          validateSnapshot(snap);
+          const raw = snap.exists ? snap.data() : {};
+          if (fingerprint(read(raw)) !== fingerprint(base))
+            throw fail(
+              "Данные изменены в другой вкладке. Обновите их перед повтором.",
+              "conflict",
+            );
+          if (!valid(t))
+            throw fail("Аккаунт изменился. Операция отменена.", "session");
+          const candidate = reduce(base, frozen, operationDay);
+          if(workspace?.authorizeWrite)await workspace.authorizeWrite(raw,candidate,frozen);
+          if((catalogMode || (frozen.type==='subscription' && frozen.templateId===undefined && operationId(frozen.operationId))) && fingerprint(candidate)===fingerprint(base))return base;
+          const next = {
+            ...candidate,
+            _fitppRevision: base._fitppRevision + 1,
+          };
+          if (workspace) workspace.validate({ ...raw, ...next });
+          // Replace the complete confirmed maps; omission of a visit really removes it.
+          // Preserve every unrelated top-level field from the transaction snapshot.
+          tx.set(ref, { ...raw, ...next });
+          return next;
+        });
+        if (!valid(t)) return false;
+        baseline = copy(committed);
+        publish({
+          ...copy(committed),
+          saving: false,
+          saveStatus: workspace && !workspace.local ? "Сохранено" : "Сохранено только в памяти просмотра",
+        });
+        return true;
+      } catch (error) {
+        if (valid(t))
+          publish({
+            saving: false,
+            dataReady: false,
+            syncError: String(error.code).includes("permission-denied") ? "Не сохранено. Обновите FitPP и загрузите актуальные цены. Сервер отклонил несовместимую операцию; история доступна." : "Не сохранено. " + error.message,
+            saveStatus: "",
+          });
+        return false;
+      }
+    }
+    return {
+      token,
+      run,
+      load,
+      start(callback) {
+        notify = callback;
+        if (unsubscribe) return;
+        unsubscribe = auth.onAuthStateChanged((user) => {
+          reset(user);
+          if (user) void load();
+        });
+      },
+      async logout() {
+        reset(null); // Immediately discard references, even when signOut fails.
+        try {
+          await auth.signOut();
+        } catch (error) {
+          publish({
+            currentUser: auth.currentUser,
+            syncError:
+              "Ошибка выхода. Данные скрыты; повторите выход. " + error.message,
+          });
+        }
+      },
+      stop() {
+        unsubscribe?.();
+        unsubscribe = null;
+        reset(null);
+      },
+    };
+  }
+  return { pricing, subscriptionTerms, validateCompatibleData, ...(catalogMode ? {pricing} : {createProductionPricingModel:()=>buildStore('catalog')}), taxTotal, covers, availableSubscriptions, balance, debt, bookingFreeze, report, legacyPayments, ledger, extensionRemaining, subscriptionTitle, deletionPlan, subscriptionWarnings, create, read, reduce, prices, fingerprint, rentDates, rentTotal, localDate, dayNumber, addDays, frozenOn, freezeStart, pendingFreeze, schedule, workoutsOn, migrate, unresolved };
+});

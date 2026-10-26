@@ -1,0 +1,268 @@
+{
+  "clients": [
+    {
+      "id": "demo-client-1",
+      "name": "Вымышленный клиент 1",
+      "phone": "",
+      "locations": [
+        "zarya",
+        "online"
+      ],
+      "money": {
+        "version": 1,
+        "entries": [
+          {
+            "id": "9faeda87-be75-441f-9d19-87e20e820de3",
+            "kind": "sale",
+            "date": "2026-10-23",
+            "method": "cash",
+            "received": 440000,
+            "price": 440000,
+            "used": 0,
+            "delta": 0,
+            "ref": "subscription-demo-sale-demo-client-1"
+          }
+        ]
+      },
+      "subscriptions": [
+        {
+          "id": "subscription-demo-sale-demo-client-1",
+          "paymentId": "9faeda87-be75-441f-9d19-87e20e820de3",
+          "termsVersion": 1,
+          "templateId": "plan-zarya",
+          "templateRevision": 1,
+          "saleOperationId": "demo-sale-demo-client-1",
+          "saleRequest": "{\"clientId\":\"demo-client-1\",\"date\":\"2026-10-23\",\"expectedTemplateRevision\":1,\"method\":\"cash\",\"operationId\":\"demo-sale-demo-client-1\",\"received\":4400,\"templateId\":\"plan-zarya\",\"type\":\"subscription\"}",
+          "terms": {
+            "name": "Заря",
+            "priceKopecks": 440000,
+            "sessions": 8,
+            "durationDays": 28,
+            "locations": [
+              "zarya",
+              "pole",
+              "online"
+            ]
+          },
+          "left": 8,
+          "startDate": "2026-10-23",
+          "expires": "2026-11-20",
+          "price": 4400
+        }
+      ]
+    },
+    {
+      "id": "demo-client-2",
+      "name": "Вымышленный клиент 2",
+      "phone": "",
+      "locations": [
+        "zarya",
+        "online"
+      ],
+      "money": {
+        "version": 1,
+        "entries": [
+          {
+            "id": "64b49d81-09f4-445f-bad2-0e4f025616b4",
+            "kind": "sale",
+            "date": "2026-10-23",
+            "method": "cash",
+            "received": 440000,
+            "price": 440000,
+            "used": 0,
+            "delta": 0,
+            "ref": "subscription-demo-sale-demo-client-2"
+          }
+        ]
+      },
+      "subscriptions": [
+        {
+          "id": "subscription-demo-sale-demo-client-2",
+          "paymentId": "64b49d81-09f4-445f-bad2-0e4f025616b4",
+          "termsVersion": 1,
+          "templateId": "plan-zarya",
+          "templateRevision": 1,
+          "saleOperationId": "demo-sale-demo-client-2",
+          "saleRequest": "{\"clientId\":\"demo-client-2\",\"date\":\"2026-10-23\",\"expectedTemplateRevision\":1,\"method\":\"cash\",\"operationId\":\"demo-sale-demo-client-2\",\"received\":4400,\"templateId\":\"plan-zarya\",\"type\":\"subscription\"}",
+          "terms": {
+            "name": "Заря",
+            "priceKopecks": 440000,
+            "sessions": 8,
+            "durationDays": 28,
+            "locations": [
+              "zarya",
+              "pole",
+              "online"
+            ]
+          },
+          "left": 8,
+          "startDate": "2026-10-23",
+          "expires": "2026-11-20",
+          "price": 4400
+        }
+      ]
+    },
+    {
+      "id": "demo-client-3",
+      "name": "Вымышленный клиент 3",
+      "phone": "",
+      "locations": [
+        "zarya",
+        "online"
+      ],
+      "money": {
+        "version": 1,
+        "entries": [
+          {
+            "id": "41c8a197-03c9-4165-b468-113cbc72bb42",
+            "kind": "sale",
+            "date": "2026-10-23",
+            "method": "cash",
+            "received": 440000,
+            "price": 440000,
+            "used": 0,
+            "delta": 0,
+            "ref": "subscription-demo-sale-demo-client-3"
+          }
+        ]
+      },
+      "subscriptions": [
+        {
+          "id": "subscription-demo-sale-demo-client-3",
+          "paymentId": "41c8a197-03c9-4165-b468-113cbc72bb42",
+          "termsVersion": 1,
+          "templateId": "plan-zarya",
+          "templateRevision": 1,
+          "saleOperationId": "demo-sale-demo-client-3",
+          "saleRequest": "{\"clientId\":\"demo-client-3\",\"date\":\"2026-10-23\",\"expectedTemplateRevision\":1,\"method\":\"cash\",\"operationId\":\"demo-sale-demo-client-3\",\"received\":4400,\"templateId\":\"plan-zarya\",\"type\":\"subscription\"}",
+          "terms": {
+            "name": "Заря",
+            "priceKopecks": 440000,
+            "sessions": 8,
+            "durationDays": 28,
+            "locations": [
+              "zarya",
+              "pole",
+              "online"
+            ]
+          },
+          "left": 8,
+          "startDate": "2026-10-23",
+          "expires": "2026-11-20",
+          "price": 4400
+        }
+      ]
+    },
+    {
+      "id": "demo-client-4",
+      "name": "Вымышленный клиент 4",
+      "phone": "",
+      "locations": [
+        "zarya",
+        "online"
+      ],
+      "money": {
+        "version": 1,
+        "entries": [
+          {
+            "id": "f6a9e6f3-449b-425b-af4c-18eef7bbf250",
+            "kind": "sale",
+            "date": "2026-10-23",
+            "method": "cash",
+            "received": 440000,
+            "price": 440000,
+            "used": 0,
+            "delta": 0,
+            "ref": "subscription-demo-sale-demo-client-4"
+          }
+        ]
+      },
+      "subscriptions": [
+        {
+          "id": "subscription-demo-sale-demo-client-4",
+          "paymentId": "f6a9e6f3-449b-425b-af4c-18eef7bbf250",
+          "termsVersion": 1,
+          "templateId": "plan-zarya",
+          "templateRevision": 1,
+          "saleOperationId": "demo-sale-demo-client-4",
+          "saleRequest": "{\"clientId\":\"demo-client-4\",\"date\":\"2026-10-23\",\"expectedTemplateRevision\":1,\"method\":\"cash\",\"operationId\":\"demo-sale-demo-client-4\",\"received\":4400,\"templateId\":\"plan-zarya\",\"type\":\"subscription\"}",
+          "terms": {
+            "name": "Заря",
+            "priceKopecks": 440000,
+            "sessions": 8,
+            "durationDays": 28,
+            "locations": [
+              "zarya",
+              "pole",
+              "online"
+            ]
+          },
+          "left": 8,
+          "startDate": "2026-10-23",
+          "expires": "2026-11-20",
+          "price": 4400
+        }
+      ]
+    }
+  ],
+  "attendance": {},
+  "finances": {
+    "2026-10": 17600
+  },
+  "rentMonths": {},
+  "attendanceOps": {},
+  "workouts": {},
+  "visits": {},
+  "visitOps": {},
+  "legacyLinks": {},
+  "legacySources": {},
+  "_fitppRevision": 0,
+  "ownerUid": "lLlMAetSG1aEeJSeBl4F4ypydEh2",
+  "datasetId": "synthetic-v1",
+  "schemaVersion": 1,
+  "pricingSettings": {
+    "version": 1,
+    "revision": 0,
+    "templates": {
+      "plan-zarya": {
+        "id": "plan-zarya",
+        "revision": 1,
+        "name": "Заря",
+        "priceKopecks": 440000,
+        "sessions": 8,
+        "durationDays": 28,
+        "locations": [
+          "zarya",
+          "pole",
+          "online"
+        ],
+        "archived": false,
+        "lastOperationId": "initial",
+        "lastOperationKind": "save"
+      },
+      "plan-pole": {
+        "id": "plan-pole",
+        "revision": 1,
+        "name": "Поле чудес",
+        "priceKopecks": 380000,
+        "sessions": 8,
+        "durationDays": 28,
+        "locations": [
+          "zarya",
+          "pole",
+          "online"
+        ],
+        "archived": false,
+        "lastOperationId": "initial",
+        "lastOperationKind": "save"
+      }
+    },
+    "singlePrices": {
+      "revision": 1,
+      "zarya": 70000,
+      "pole": 60000,
+      "online": 50000,
+      "lastOperationId": "initial"
+    }
+  }
+}

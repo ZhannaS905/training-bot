@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "mode": "test",
+  "projectId": "fitpp-test",
+  "datasetId": "synthetic-v1",
+  "testBotId": null,
+  "ownerPrivateChatId": null,
+  "tokenConfigured": false,
+  "verification": null
+}

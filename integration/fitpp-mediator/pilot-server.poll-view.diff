@@ -1,0 +1,21 @@
+--- a/src/pilot-server.cjs
++++ b/src/pilot-server.cjs
+@@ -2,6 +2,7 @@
+ const http=require('node:http'),crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path');
+ const {session}=require('./cloud-session.cjs'),{connectCloud}=require('./firestore-cloud.cjs'),{Service,MAIN,BOOKINGS}=require('./service.cjs'),{handle}=require('./max-adapter.cjs'),{verify}=require('./ingress.cjs'),{normalize,USER,POLL}=require('./pilot-policy.cjs'),{prepare}=require('./pilot-provision.cjs');
+ const {connectClient}=require('./firestore-client.cjs');
++const {readPollView}=require('./poll-view.cjs');
+ const secretPath=path.join(__dirname,'../.pilot-secrets.json');
+ let secret;try{secret=JSON.parse(fs.readFileSync(secretPath)).hmac}catch{secret=crypto.randomBytes(32).toString('hex');fs.writeFileSync(secretPath,JSON.stringify({hmac:secret}),{mode:0o600,flag:'wx'})}
+ const auth=session();let enabled=false,poll={...POLL},cloudWrites=0,busy=false,preparing=false;const armAllowed=process.env.FITPP_PILOT_ALLOW_ARM==='true';
+@@ -27,8 +28,8 @@
+ }
+ else throw Error('ROUTE_REJECTED');json(res,200,result);
+ }catch(e){enabled=false;json(res,400,{error:e.message,code:e.code,operation:e.operation,documents:e.documents,document:e.document,...status()})}finally{busy=false}});
+-const ingress=http.createServer(async(req,res)=>{if(req.method!=='POST'||req.url!=='/bot/update'||req.headers.origin)return json(res,404,{error:'NOT_FOUND'});
+-try{const raw=await body(req);verify(secret,req.headers['x-time'],'/bot/update',raw,req.headers['x-signature']);if(!enabled||!auth.status().signedIn)throw Error('PILOT_DISABLED');const event=normalize(JSON.parse(raw),poll);if(busy)throw Error('BUSY');busy=true;try{const result=await handle(svc,event);if(result.applied)cloudWrites++;json(res,200,result)}finally{busy=false}}
++const ingress=http.createServer(async(req,res)=>{if(req.method!=='POST'||!['/bot/update','/bot/poll-view'].includes(req.url)||req.headers.origin)return json(res,404,{error:'NOT_FOUND'});
++try{const raw=await body(req);verify(secret,req.headers['x-time'],req.url,raw,req.headers['x-signature']);if(!enabled||!auth.status().signedIn)throw Error('PILOT_DISABLED');const payload=JSON.parse(raw);if(req.url==='/bot/poll-view'){if(payload.chat!==POLL.chat||payload.mid!==POLL.mid||payload.uuid!==POLL.uuid)throw Error('POLL_SCOPE_REJECTED');if(busy)throw Error('BUSY');busy=true;try{json(res,200,await readPollView(clientDb,poll))}finally{busy=false}return;}const event=normalize(payload,poll);if(busy)throw Error('BUSY');busy=true;try{const result=await handle(svc,event);if(result.applied)cloudWrites++;json(res,200,result)}finally{busy=false}}
+ catch(e){json(res,403,{error:'REQUEST_REJECTED'})}});
+ control.listen(8804,'127.0.0.1');ingress.listen(8805,'127.0.0.1');
+ function stop(){enabled=false;auth.logout();control.close();ingress.close()};process.on('SIGINT',stop);process.on('SIGTERM',stop);

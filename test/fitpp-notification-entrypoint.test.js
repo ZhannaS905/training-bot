@@ -1,0 +1,108 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {main}=require('../fitpp-notification-test.cjs');
+const preview=require('../fitpp-notification-preview.cjs');
+const env={BOT_MODE:'test',FIREBASE_PROJECT_ID:'fitpp-test',TEST_EXPECTED_BOT_ID:'131384398',TEST_BOT_TOKEN:'mock',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',FIREBASE_API_KEY:'fake-key',FIREBASE_BOT_EMAIL:'fake@example.invalid',FIREBASE_BOT_PASSWORD:'fake-password',CHAT_IDS:'-80345864298680'};
+const uid='lLlMAetSG1aEeJSeBl4F4ypydEh2';
+const binding={version:1,botId:131384398,bindings:[{clientId:'demo-client-1',maxChatId:126619382,maxUserId:5819064,notificationsEnabled:true}]};
+function snapshots(){
+  const before={...structuredClone(require('../direct-core/fixtures/main.json')),_fitppRevision:90,attendanceRevision:112,clients:[{id:'demo-client-1',subscriptions:[{id:'sub',left:6}]}],visits:{},visitOps:{},attendanceOps:{},workouts:{w:{id:'w',date:'2026-10-26',location:'zarya',cancelled:false}}};
+  const after=structuredClone(before);after.attendanceRevision++;after.clients[0].subscriptions[0].left=5;
+  after.visits.w={'demo-client-1':'attended'};after.visitOps.w={'demo-client-1':{operationId:'entrypoint-operation-1234',subscriptionId:'sub',status:'attended',workoutId:'w',location:'zarya'}};
+  return [before,after,after];
+}
+function wire(v){
+  if(v===null)return {nullValue:null};if(Array.isArray(v))return {arrayValue:{values:v.map(wire)}};
+  if(typeof v==='object')return {mapValue:{fields:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,wire(x)]))}};
+  return typeof v==='string'?{stringValue:v}:typeof v==='boolean'?{booleanValue:v}:{integerValue:String(v)};
+}
+function fixture(t,{wrongUser=false}={}){
+  const storageRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fitpp-entrypoint-'));
+  const calls=[],logs=[],states=snapshots();let reads=0,waits=0;
+  t.after(()=>fs.rmSync(storageRoot,{recursive:true,force:true}));
+  t.mock.method(console,'log',line=>logs.push(line));
+  // Every fetch is intercepted. Unknown URLs fail before any network transport.
+  t.mock.method(global,'fetch',async(input,options)=>{
+    const url=new URL(input);calls.push({url,options});let data;
+    if(url.origin==='https://identitytoolkit.googleapis.com'){
+      assert.equal(options.method,'POST');assert.equal(url.pathname,'/v1/accounts:signInWithPassword');
+      const claims={aud:'fitpp-test',iss:'https://securetoken.google.com/fitpp-test',sub:uid,exp:Math.floor(Date.now()/1000)+3600};
+      data={localId:uid,idToken:'header.'+Buffer.from(JSON.stringify(claims)).toString('base64url')+'.signature'};
+    }else if(url.origin==='https://firestore.googleapis.com'){
+      assert.equal(options.method,'GET');
+      const prefix='/v1/projects/fitpp-test/databases/(default)/documents/fitppTestWorkspaces/synthetic-v1/';
+      assert.ok(url.pathname===prefix+'states/main'||url.pathname===prefix+'notificationBindings/training-test');
+      const value=url.pathname.endsWith('/states/main')?states[Math.min(reads++,states.length-1)]:binding;
+      data={name:url.pathname.slice(4),fields:wire(value).mapValue.fields};
+    }else{
+      assert.equal(url.origin,'https://platform-api2.max.ru');assert.equal(options.headers.Authorization,'mock');
+      if(url.pathname==='/me'){assert.equal(options.method,'GET');data={user_id:131384398,username:'id623401053090_1_bot',is_bot:true};}
+      else if(url.pathname==='/chats/126619382'){assert.equal(options.method,'GET');data={chat_id:126619382,type:'dialog',status:'active',dialog_with_user:{user_id:wrongUser?999:5819064,is_bot:false}};}
+      else {assert.equal(url.pathname,'/messages');assert.equal(options.method,'POST');assert.equal(url.search,'?chat_id=126619382');data={message:{body:{mid:'mock-mid'}}};}
+    }
+    assert.equal(options.redirect,'error');return {ok:true,json:async()=>data};
+  });
+  const stop=new Error('END_OF_FIXTURE');
+  const wait=async ms=>{assert.equal(ms,30000);if(++waits===3)throw stop;};
+  return {storageRoot,wait,stop,calls,logs};
+}
+test('standalone dry-run: Auth -> fixed Firestore snapshots -> identity -> candidate, zero MAX writes or disk claims',async t=>{
+  const f=fixture(t);await assert.rejects(main(env,['--watch'],f),e=>e===f.stop);
+  assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT dry-run'));
+  assert.equal(f.calls.filter(c=>c.url.hostname==='platform-api2.max.ru'&&c.options.method!=='GET').length,0);
+  assert.deepEqual(fs.readdirSync(f.storageRoot),[]);
+});
+test('standalone send mode with intercepted fetch: baseline silent, one personal POST, repeat silent, durable claim',async t=>{
+  const f=fixture(t);await assert.rejects(main(env,['--send','--watch'],f),e=>e===f.stop);
+  const posts=f.calls.filter(c=>c.url.hostname==='platform-api2.max.ru'&&c.options.method==='POST');
+  assert.equal(posts.length,1);assert.deepEqual(JSON.parse(posts[0].options.body),{text:'ТЕСТ FitPP: списано 1 занятие. Остаток: 5 зан.',notify:false});
+  assert.equal(f.logs[0],'FITPP_NOTIFICATION_BASELINE no_history_send');
+  assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT sent'));
+  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,1);
+});
+test('standalone verify exits without sending or creating storage',async t=>{
+  const f=fixture(t);await main(env,['--verify'],f);
+  assert.deepEqual(f.logs,['FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write']);
+  assert.equal(f.calls.length,5);assert.deepEqual(fs.readdirSync(f.storageRoot),[]);
+});
+test('standalone refuses wrong live recipient before any message or reservation',async t=>{
+  const f=fixture(t,{wrongUser:true});await assert.rejects(main(env,['--send','--watch'],f),/NOTIFICATION_RECIPIENT_REFUSED/);
+  assert.ok(f.calls.every(c=>c.url.hostname!=='platform-api2.max.ru'||c.options.method==='GET'));
+  assert.deepEqual(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')),[]);
+});
+test('existing preview watcher delegates explicit send mode through prepared integration and blocks replay after restart',async t=>{
+  const f=fixture(t);
+  await assert.rejects(preview.main(env,['--send','--watch'],f),e=>e===f.stop);
+  let waits=0;
+  await assert.rejects(preview.main(env,['--send','--watch'],{...f,wait:async()=>{if(++waits===2)throw f.stop;}}),e=>e===f.stop);
+  const posts=f.calls.filter(c=>c.url.hostname==='platform-api2.max.ru'&&c.options.method==='POST');
+  assert.equal(posts.length,1);assert.equal(posts[0].url.search,'?chat_id=126619382');
+  assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT sent'));
+  assert.ok(!f.logs.some(line=>line.startsWith('FITPP_PREVIEW_ONLY')));
+  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,1);
+});
+test('existing watcher send mode refuses production, wrong recipient and ambiguous flags',async t=>{
+  const f=fixture(t,{wrongUser:true});
+  for(const args of [['--send'],['--send','--checks','4'],['--diagnose','--send','--watch'],['--send','--watch','--send']])
+    await assert.rejects(preview.main(env,args,f),/ARGUMENT_REFUSED/);
+  await assert.rejects(preview.main({...env,FIREBASE_PROJECT_ID:'fitpp-crm'},['--send','--watch'],f),/PROJECT_REFUSED/);
+  assert.equal(f.calls.length,0);
+  await assert.rejects(preview.main(env,['--send','--watch'],f),/NOTIFICATION_RECIPIENT_REFUSED/);
+  assert.ok(f.calls.every(c=>c.url.hostname!=='platform-api2.max.ru'||c.options.method==='GET'));
+});
+test('actual preview CLI loads shared helpers before delegation and hides transport errors',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fitpp-cli-connect-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const hook=path.join(dir,'offline.cjs');
+  fs.writeFileSync(hook,`const fs=require('node:fs');
+const stat=fs.statSync,mkdir=fs.mkdirSync;
+fs.statSync=function(p,...args){return p==='/app/data'?{isDirectory:()=>true}:stat.call(this,p,...args)};
+fs.mkdirSync=function(p,...args){if(p==='/app/data/fitpp-notification-attempts-v1')return;return mkdir.call(this,p,...args)};
+global.fetch=async()=>{console.log('TEST_AUTH_INTERCEPTED');throw Error('private-transport-detail')};
+`);
+  const result=require('node:child_process').spawnSync(process.execPath,['--require',hook,path.resolve(__dirname,'../fitpp-notification-preview.cjs'),'--send','--watch'],{env:{...process.env,...env},encoding:'utf8'});
+  assert.equal(result.status,1);assert.equal(result.stdout.trim(),'TEST_AUTH_INTERCEPTED');
+  assert.equal(result.stderr.trim(),'FITPP_NOTIFICATION_FAILED CHECK_FAILED');
+  assert.ok(!result.stderr.includes('private-transport-detail'));
+});

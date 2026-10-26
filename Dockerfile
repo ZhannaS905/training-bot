@@ -6,7 +6,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY direct-sdk/package.json direct-sdk/package-lock.json ./direct-sdk/
 RUN npm ci --prefix direct-sdk --omit=dev --ignore-scripts --no-audit --no-fund --engine-strict
 COPY memory-training-test.cjs direct-preflight.cjs direct-training-test.cjs ./
-COPY fitpp-notification-preview.cjs ./
+COPY fitpp-notification-preview.cjs fitpp-notification-test.cjs ./
 COPY training-test-autopost-state.cjs ./
 COPY src/ ./src/
 COPY direct-core/ ./direct-core/

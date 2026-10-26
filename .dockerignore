@@ -6,6 +6,7 @@
 !package-lock.json
 !memory-training-test.cjs
 !fitpp-notification-preview.cjs
+!fitpp-notification-test.cjs
 !direct-preflight.cjs
 !direct-training-test.cjs
 !training-test-autopost-state.cjs

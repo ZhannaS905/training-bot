@@ -2,7 +2,8 @@
 
 // Standalone read-only Firestore preview for Training Test.
 // Explicit command only; never imported by bot.js or direct-training-test.cjs.
-// Makes one Firebase Auth POST (sign-in) and Firestore GET requests. No MAX API.
+// Default: Auth POST and Firestore GET only. Explicit --send --watch delegates
+// to the prepared Training Test integration and its verified personal MAX sender.
 const { createPreviewSession } = require('./src/fitpp-notification-dry-run.cjs');
 const PROJECT = 'fitpp-test';
 const MAIN = 'fitppTestWorkspaces/synthetic-v1/states/main';
@@ -67,8 +68,15 @@ async function readBoth(token) {
   return { main, binding };
 }
 async function main(env = process.env, args = process.argv.slice(2), {
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  storageRoot = '/app/data'
 } = {}) {
+  if (args.includes('--send')) {
+    if (args.length !== 2 || args[0] !== '--send' || args[1] !== '--watch') throw Error('ARGUMENT_REFUSED');
+    // Lazy loading preserves the original read-only preview and reuses the
+    // existing detector -> durable sender -> MaxApi path without a second loop.
+    return require('./fitpp-notification-test.cjs').main(env, args, {wait,storageRoot});
+  }
   const diagnose = args.includes('--diagnose');
   if (args.filter(arg => arg === '--diagnose').length > 1) throw Error('ARGUMENT_REFUSED');
   args = args.filter(arg => arg !== '--diagnose');
@@ -108,12 +116,13 @@ async function main(env = process.env, args = process.argv.slice(2), {
     await check();
   }
 }
+// Publish shared read helpers before CLI delegation loads the prepared watcher.
+module.exports = { decode, decodeFields, config, signIn, readBoth, main };
 if (require.main === module) {
   main().catch(error => {
     const safe = /^(PROJECT_REFUSED|CONFIG_MISSING|UID_REFUSED|TOKEN_REFUSED|STATE_REFUSED|BINDING_REFUSED|PATH_REFUSED|ARGUMENT_REFUSED|HTTP_[1-5][0-9][0-9])$/.test(error?.message || '')
       ? error.message : 'CHECK_FAILED';
-    console.error('FITPP_DRY_RUN_FAILED ' + safe);
+    console.error((process.argv.slice(2).includes('--send') ? 'FITPP_NOTIFICATION_FAILED ' : 'FITPP_DRY_RUN_FAILED ') + safe);
     process.exitCode = 1;
   });
 }
-module.exports = { decode, decodeFields, config, main };

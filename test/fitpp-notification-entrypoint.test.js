@@ -114,3 +114,26 @@ test('live mode requires operator-confirmed persistent volume before network',as
  fs.writeFileSync(path.join(f.storageRoot,'.fitpp-notification-volume'),env.FITPP_NOTIFICATION_STORAGE_CONFIRMED);
  await assert.rejects(main({...env,FITPP_NOTIFICATION_STORAGE_CONFIRMED:''},['--send','--watch'],f),/DURABLE_STORAGE_REQUIRED/);assert.equal(f.calls.length,0);
 });
+test('verified Training Test volume accepts existing evidence, preserves journal and refuses missing or changed evidence',async t=>{
+ const f=fixture(t),read=fs.readFileSync,stat=fs.statSync,mkdir=fs.mkdirSync;
+ const claim='/app/data/fitpp-notification-attempts-v1/f50668b32b88ed07d5831a719737b31b6aff4c59b9f4b8f4aa6362a8bf7e3a3e';
+ const evidence=new Map([['/app/data/fitpp-storage-check.txt','fitpp-storage-check-20261026\n'],[claim,'attempted\n']]);
+ t.mock.method(fs,'readFileSync',(p,...args)=>{if(String(p).startsWith('/app/data/')){if(!evidence.has(p))throw Error('ENOENT');return evidence.get(p)}return read(p,...args)});
+ t.mock.method(fs,'statSync',(p,...args)=>p==='/app/data'?{isDirectory:()=>true}:stat(p,...args));
+ t.mock.method(fs,'mkdirSync',(p,...args)=>{if(p==='/app/data/fitpp-notification-attempts-v1')return;return mkdir(p,...args)});
+ const liveEnv={...env,FITPP_NOTIFICATION_STORAGE_CONFIRMED:'fitpp-test:training-test:storage-check-20261026'};
+ const options={...f,storageRoot:'/app/data',wait:async()=>{throw f.stop}};
+ await assert.rejects(main(liveEnv,['--send','--watch'],options),e=>e===f.stop);
+ assert.ok(f.logs.includes('FITPP_NOTIFICATION_BASELINE no_history_send'));
+ assert.equal(evidence.get(claim),'attempted\n');
+ const calls=f.calls.length;
+ for(const [file,value] of [...evidence]){
+   evidence.delete(file);await assert.rejects(main(liveEnv,['--send','--watch'],options));
+   evidence.set(file,'wrong');await assert.rejects(main(liveEnv,['--send','--watch'],options),/DURABLE_STORAGE_REQUIRED/);
+   evidence.set(file,value);
+ }
+ await assert.rejects(main(liveEnv,['--send','--watch'],f),/DURABLE_STORAGE_REQUIRED/);
+ await assert.rejects(main({...liveEnv,FIREBASE_PROJECT_ID:'production'},['--send','--watch'],options));
+ assert.equal(f.calls.length,calls);
+ assert.ok(f.calls.every(c=>c.url.hostname!=='platform-api2.max.ru'||c.options.method==='GET'));
+});

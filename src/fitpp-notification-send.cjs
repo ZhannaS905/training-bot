@@ -19,11 +19,11 @@ function settings(env) {
 }
 async function verify(raw, binding, clientId) {
   if (clientId === undefined) {
-    if (!Array.isArray(binding?.bindings)) throw Error('NOTIFICATION_BINDING_REFUSED');
-    for (const row of binding.bindings.filter(row => row.notificationsEnabled)) await verify(raw,binding,row.clientId);
-    return;
+    return verify(raw,binding,'demo-client-1');
   }
-  if (!validBinding(binding,clientId)) throw Error('NOTIFICATION_BINDING_REFUSED');
+  if (!validBinding(binding,clientId) || clientId !== 'demo-client-1' ||
+      binding.bindings.some(row => row.notificationsEnabled &&
+        (row.clientId !== 'demo-client-1' || row.maxChatId !== 126619382 || row.maxUserId !== 5819064))) throw Error('NOTIFICATION_BINDING_REFUSED');
   if (!identityAccepted(checkTestBotIdentity(await raw.request('GET','/me'),BOT))) throw Error('NOTIFICATION_IDENTITY_REFUSED');
   const {maxChatId: CHAT, maxUserId: USER} = binding.bindings.find(row => row.clientId === clientId);
   const chat = await raw.request('GET','/chats/' + CHAT);

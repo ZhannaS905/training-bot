@@ -14,8 +14,17 @@ async function main(env=process.env,args=process.argv.slice(2),{
   const live=mode==='--send --watch';
   const directory=require('node:path').join(storageRoot,'fitpp-notification-attempts-v1');
   if(live){
-    if(env.FITPP_NOTIFICATION_STORAGE_CONFIRMED !== 'fitpp-test:synthetic-v1:training-test:v1' ||
-       fs.readFileSync(require('node:path').join(storageRoot,'.fitpp-notification-volume'),'utf8').trim() !== env.FITPP_NOTIFICATION_STORAGE_CONFIRMED)
+    const path=require('node:path');
+    const confirmed=env.FITPP_NOTIFICATION_STORAGE_CONFIRMED;
+    if(confirmed === 'fitpp-test:training-test:storage-check-20261026') {
+      // Operator verified these exact files across restart AND rebuild on Training Test.
+      // Never create or repair the evidence: a missing volume must stop sending.
+      if(storageRoot !== '/app/data' ||
+         fs.readFileSync(path.join(storageRoot,'fitpp-storage-check.txt'),'utf8').trim() !== 'fitpp-storage-check-20261026' ||
+         fs.readFileSync(path.join(directory,'f50668b32b88ed07d5831a719737b31b6aff4c59b9f4b8f4aa6362a8bf7e3a3e'),'utf8') !== 'attempted\n')
+        throw Error('DURABLE_STORAGE_REQUIRED');
+    } else if(confirmed !== 'fitpp-test:synthetic-v1:training-test:v1' ||
+       fs.readFileSync(path.join(storageRoot,'.fitpp-notification-volume'),'utf8').trim() !== confirmed)
       throw Error('DURABLE_STORAGE_REQUIRED');
     if(!fs.statSync(storageRoot).isDirectory())throw Error('DURABLE_STORAGE_REQUIRED');
     fs.mkdirSync(directory,{recursive:true,mode:0o700});

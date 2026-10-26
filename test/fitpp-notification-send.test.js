@@ -13,10 +13,11 @@ test('mismatched live dialog user refuses send and reservation',async t=>{const 
 test('no temporary ceiling; each workout reserved separately',async t=>{const s=setup(t),sender=createSender({env,...s});for(let n=0;n<5;n++)assert.equal(await sender.send({...item,workoutId:'w'+n,operationId:'operation-'+n},binding),'sent');assert.equal(s.calls.filter(x=>typeof x==='object').length,5);await assert.rejects(createSender({env,...s,directory:path.join(s.directory,'missing')}).send(item,binding))});
 test('replacement operation for already notified workout remains blocked',async t=>{const s=setup(t),sender=createSender({env,...s});assert.equal(await sender.send(item,binding),'sent');assert.equal(await createSender({env,...s}).send({...item,operationId:'replacement-123'},binding),'duplicate')});
 test('approved templates, date and warnings',()=>{const {formatNotification:f}=require('../src/fitpp-notification-send.cjs');assert.equal(f({...item,remaining:6}),'✅ Тренировка состоялась!\n\n📅 26.10.2026\nС абонемента списано 1 занятие.\n\nОсталось занятий: 6\n\n🫶 До встречи на следующей тренировке!');assert.match(f({...item,status:'missed',remaining:1}),/^🔥 Занятие сгорело/);assert.match(f({...item,remaining:1}),/⚠️ Осталось последнее занятие!/);assert.match(f({...item,remaining:0}),/⚠️ Занятия по абонементу закончились./)});
-test('additional connected client and missed attendance use verified binding',async t=>{
+test('additional recipients are refused even with matching live dialog',async t=>{
  const s=setup(t), b={...binding,bindings:[...binding.bindings,{clientId:'connected-2',maxChatId:98765,maxUserId:12345,notificationsEnabled:true}]};
  const original=s.raw.request;s.raw.request=async(method,url)=>url==='/chats/98765'?{chat_id:98765,type:'dialog',status:'active',dialog_with_user:{user_id:12345,is_bot:false}}:original(method,url);
- assert.equal(await createSender({env,...s}).send({...item,clientId:'connected-2',maxChatId:98765,status:'missed'},b),'sent');
- assert.equal(s.calls.find(x=>typeof x==='object').chat,'98765');
+ await assert.rejects(createSender({env,...s}).send({...item,clientId:'connected-2',maxChatId:98765,status:'missed'},b),/NOTIFICATION_BINDING_REFUSED/);
+ await assert.rejects(createSender({env,...s}).verify(b),/NOTIFICATION_BINDING_REFUSED/);
+ assert.equal(s.calls.length,0);assert.equal(fs.readdirSync(s.directory).length,0);
  for(const key of ['clientId','maxChatId','maxUserId']){const bad=structuredClone(b);bad.bindings[1][key]=bad.bindings[0][key];await assert.rejects(createSender({env,...s}).send(item,bad));}
 });

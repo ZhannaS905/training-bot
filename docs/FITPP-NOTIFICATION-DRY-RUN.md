@@ -145,3 +145,43 @@ BotHost, ENV, ветка работающего Training Test, webhook, producti
 stderr при ошибке последующего чтения. Реальные Firebase/MAX не вызываются.
 В этой доработке Dockerfile, entrypoint, TLS, ENV и механизмы опросов не менялись;
 пересборка или деплой BotHost не выполнялись.
+
+## Диагностика previews=0
+
+После пересборки Training Test из этой ветки выполните одну команду в BotHost:
+
+```sh
+node /opt/training-test/fitpp-notification-preview.cjs --diagnose --checks 4
+```
+
+Разделители команд и heredoc не нужны. Команда завершится примерно через
+90 секунд; для первоначальной проверки ничего списывать не нужно.
+`--diagnose` также совместим с `--watch` и однократным запуском.
+Без флага прежний stdout сохраняется.
+
+Дополнительные строки `FITPP_DRY_RUN_DIAGNOSTIC` содержат только ревизии,
+boolean bindingApproved, количества всех visitOps/attendanceOps и visitOps
+пилотного клиента, а также фиксированные коды причин с количествами.
+Идентификаторы, имена, контакты, даты тренировок, значения полей операций,
+токены и пароли не выводятся. `beforeRevision:null` и `BASELINE_ONLY` означают
+первый снимок. На последующих чтениях `REVISION_NOT_PLUS_ONE` означает как
+пропуск ревизий, так и отсутствие изменений: сравните числа before/after.
+Равные ревизии в спокойной базе нормальны и не доказывают причину прошлого
+списания. Исторический before после завершения старого процесса недоступен.
+
+Другие причины: BINDING_NOT_APPROVED (включая неверную личность/число
+привязок даже при notificationsEnabled:true), NO_PILOT_VISIT_OPS,
+NOT_ATTENDED, OPERATION_FIELDS_INVALID, OPERATION_ALREADY_IN_BEFORE,
+DUPLICATE_OPERATION_ID, EXISTING_VISIT_OR_CORRECTION, MONEY_CHARGE,
+WORKOUT_MISMATCH, SUBSCRIPTION_MISSING_AMBIGUOUS_OR_ARCHIVED,
+SUBSCRIPTION_TERMS_CHANGED, OTHER_CLIENT_VISITS_CHANGED,
+AMBIGUOUS_SUBSCRIPTION_BATCH, BALANCE_NOT_MINUS_ONE и OPERATION_SEEN_IN_SESSION.
+Для каждой видимой операции выводится первый отказ её цепочки проверок;
+диагностический режим продолжает проверку операций даже при отказе общей
+привязки или ревизии, но предпросмотры по-прежнему запрещены этими условиями.
+Baseline и защита от повторов продвигаются по прежним правилам.
+
+Проверено: 31/31 профильных и 272/272 всех тестов на локальном Node.js.
+Firebase/MAX подменены в тестах. Firestore writes, MAX, main, production,
+Dockerfile, CMD и настройки BotHost не изменены; деплой не выполнялся.
+Без снимков конкретного перехода ревизий гипотеза +1 остаётся гипотезой.

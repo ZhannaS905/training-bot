@@ -54,7 +54,11 @@ async function connect({env,sdk}) {
    }};
    return firebaseStore({sdk:guarded,db:raw,botId});
   }
-  return {db,contactStore,close};
+  // Independent capability: the booking adapter and its write flag remain unchanged.
+  function autopostStore(botId,{writeEnabled=()=>false,now=Date.now}={}) {
+   return require('./training-test-firestore').createFirestoreStore({sdk,raw,botId,validateAuth,writeEnabled,now});
+  }
+  return {db,contactStore,autopostStore,close};
  } catch(error) {await close();const safe=require('./fitpp-direct-diagnostic').mark(error,'CONNECT');safe.message='DIRECT_AUTH_CONNECTION_REJECTED';throw safe}
 }
 module.exports={settings,connect,OWNER_UID};

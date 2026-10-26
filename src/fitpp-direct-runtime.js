@@ -9,7 +9,7 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
  await at('SETTINGS',()=>settings(env));
  const directEnv={...env,FITPP_BRIDGE_URL:'https://direct.invalid/bot/update'};
  const s=await at('BRIDGE_SETTINGS',()=>bridge.settings(directEnv));
- // The historical pilot still rejects late votes in its service. Daily local polls
+ // The historical pilot still rejects late votes in its service. Daily test polls
  // must not inherit that single pilot's startup expiry. No booking scope is widened.
  const autopost=require('./training-test-autopost').settings(env);
  const checkTime=()=>{if(!autopost&&now()>=POLL.closesAt)throw Error('POLL_CLOSED')};
@@ -26,7 +26,7 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
   await at('POLL_TIME',checkTime);
   const contact=env.CONTACT_LINK_ENABLED==='true'
    ?await require('./contact-linking-runtime').prepare({env,sdk,now,session}):null;
-  return {contact,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
+  return {contact,autopostStore:session.autopostStore,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
  } catch(error){await session.close();throw error}
 }
 module.exports={prepare};

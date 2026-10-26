@@ -9,9 +9,10 @@ async function main({env=process.env}={}) {
  const prepared=await require('./src/fitpp-direct-runtime').prepare({env,sdk});
  let autopost;
  try {
-  autopost=await autopostModule.prepare({env});
+  autopost=await autopostModule.prepare({env,storeFactory:prepared.autopostStore});
   const server=await require('./src/fitpp-test-bridge').main({...prepared,autopost});
-  server.once('close',()=>void prepared.close().catch(()=>console.error('DIRECT_CLOSE_FAILED')));
+  // Drain Firestore work before closing the shared authenticated session.
+  server.once('close',()=>void (async()=>{if(autopost)await autopost.close();await prepared.close()})().catch(()=>console.error('DIRECT_CLOSE_FAILED')));
   return server;
  } catch {if(autopost)await autopost.close();await prepared.close();throw Error('DIRECT_STARTUP_REJECTED')}
 }

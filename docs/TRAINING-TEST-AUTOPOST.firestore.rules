@@ -1,0 +1,28 @@
+// ФРАГМЕНТ для добавления внутрь match /databases/{database}/documents.
+// Не заменяет существующие rules и НЕ был опубликован этой задачей.
+// Только текущий Firebase Auth UID Training Test, отдельный корень; DELETE запрещён.
+match /trainingTestAutopostBots/{botId}/polls/{date} {
+  function trainingTestAuth() {
+    return request.auth != null
+      && request.auth.uid == 'lLlMAetSG1aEeJSeBl4F4ypydEh2'
+      && botId.matches('^[1-9][0-9]*$')
+      && date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+  }
+  allow get: if trainingTestAuth();
+  allow list, delete: if false;
+  allow create, update: if trainingTestAuth()
+    && request.resource.data.version == 1
+    && request.resource.data.botId == botId
+    && request.resource.data.chat == '-80345864298680'
+    && request.resource.data.date == date
+    && request.resource.data.status in ['reserved', 'published', 'uncertain', 'external'];
+  match /events/{eventId} {
+    allow get: if trainingTestAuth() && eventId.matches('^[a-f0-9]{64}$');
+    allow create: if trainingTestAuth()
+      && eventId.matches('^[a-f0-9]{64}$')
+      && request.resource.data.keys().hasOnly(['digest', 'at'])
+      && request.resource.data.digest is string
+      && request.resource.data.at is int;
+    allow list, update, delete: if false;
+  }
+}

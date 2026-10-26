@@ -125,8 +125,21 @@ test('diagnostics never format arbitrary properties or external text',async()=>{
 });
 
 test('daily autopost can start after historical pilot closure without widening Firebase writes or pilot scope',async()=>{
- const f=fullFixture(),config={...fullConfig(),TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',TRAINING_TEST_AUTOPOST_ENABLED:'true',TRAINING_TEST_AUTOPOST_DURABLE_VOLUME:'true',TRAINING_TEST_AUTOPOST_STATE_DIR:'/data/autopost'};
+ const f=fullFixture(),config={...fullConfig(),TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',TRAINING_TEST_AUTOPOST_ENABLED:'true'};
  const s=await prepare({env:config,sdk:f.sdk,now:()=>POLL.closesAt+86400000});await s.close();
  assert.deepEqual(f.calls,['init','login','logout','terminate','delete']);
  const wrong=fullFixture();await assert.rejects(()=>prepare({env:{...config,FITPP_BRIDGE_SCOPE:JSON.stringify({...POLL,user:USER,mid:'mid.foreign'})},sdk:wrong.sdk,now:()=>POLL.closesAt+86400000}),/EXACT_SCOPE/);assert.deepEqual(wrong.calls,[]);
+});
+
+test('autopost uses the existing authenticated SDK session with separate paths and independent writes',async()=>{
+ const f=fixture(),paths=[],written=[],docs=new Map();
+ f.sdk.doc=(_,p)=>(paths.push(p),{path:p});
+ f.sdk.getDocFromServer=async ref=>({exists:()=>docs.has(ref.path),data:()=>docs.get(ref.path)});
+ f.sdk.runTransaction=async(_,fn)=>fn({get:async ref=>({exists:()=>docs.has(ref.path),data:()=>docs.get(ref.path)}),set:(ref,data)=>{written.push(ref.path);docs.set(ref.path,data)}});
+ const s=await connect({env:{...env(),FITPP_DIRECT_WRITES_ENABLED:'false'},sdk:f.sdk});
+ const store=s.autopostStore('123',{writeEnabled:()=>true});
+ await store.reserve('2026-11-02',{id:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'});
+ assert(written.every(p=>p.startsWith('trainingTestAutopostBots/123/polls/')));
+ assert.equal(f.calls.filter(x=>x==='login').length,1);
+ f.auth.currentUser=null;await assert.rejects(store.read('2026-11-02'),/BOT_AUTH_REQUIRED/);await s.close();
 });

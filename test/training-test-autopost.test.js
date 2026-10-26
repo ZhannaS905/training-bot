@@ -1,91 +1,86 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {settings,initialize,open,capability,Autopost,attach}=require('../src/training-test-autopost');
+const {database}=require('./helpers/autopost-firestore');
+const {settings,capability,pollBody,Autopost,prepare,attach}=require('../src/training-test-autopost');
 const {CHAT,body}=require('../src/memory-training-test');
 const {POLL}=require('../direct-core/src/pilot-policy.cjs');
-const env={BOT_MODE:'test',CHAT_IDS:CHAT,TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',TRAINING_TEST_AUTOPOST_ENABLED:'true',TRAINING_TEST_AUTOPOST_DURABLE_VOLUME:'true'};
-function fixture(t,date='2026-11-02T06:59:59Z'){
- const parent=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'autopost-'))),dir=path.join(parent,'ledger');initialize(dir,'2026-10-26');
+const env={BOT_MODE:'test',CHAT_IDS:CHAT,TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',TRAINING_TEST_AUTOPOST_ENABLED:'true',FIREBASE_PROJECT_ID:'fitpp-test'};
+function fixture(t,date='2026-11-02T06:59:59Z',db=database()){
  let now=new Date(date),s;const calls={send:[],edit:[],verify:0},logs=[];
- const api={verify:async()=>{calls.verify++},send:async p=>{calls.send.push(structuredClone(p));return 'mid.test'},edit:async p=>{calls.edit.push(body({...p,votes:new Map(p.votes)}))}};
- function restart(){s=new Autopost({store:open({dir}),api,admins:['1'],now:()=>now,log:x=>logs.push(x)});return s}
- restart();t.after(async()=>{if(!s.stopped)await s.close();fs.rmSync(parent,{recursive:true,force:true})});
- return {dir,calls,api,logs,get s(){return s},time:x=>{now=new Date(x)},restart};
+ const api={verify:async()=>{calls.verify++},send:async p=>{calls.send.push(structuredClone(p));return 'mid.test'},edit:async(p,{beforePut})=>{await beforePut();calls.edit.push(pollBody(p))}};
+ function restart(){s=new Autopost({store:db.store({now:()=>+now}),api,admins:['1'],now:()=>now,log:x=>logs.push(x)});return s}
+ restart();t.after(()=>s.close());return {db,calls,api,logs,get s(){return s},time:x=>{now=new Date(x)},restart};
 }
 function callback(p,id='a',action='yes',at=Date.parse('2026-11-02T07:01:00Z')){return {update_type:'message_callback',timestamp:at,callback:{callback_id:id,timestamp:at,payload:`poll:${p.id}:${action}`,user:{user_id:1,is_bot:false,first_name:'Елена <&>'}},message:{recipient:{chat_id:CHAT,chat_type:'chat'},body:{mid:p.mid}}}}
 function command(at=Date.parse('2026-11-02T08:00:00Z')){return {update_type:'message_created',timestamp:at,message:{timestamp:at,sender:{user_id:1,is_bot:false},recipient:{chat_id:CHAT,chat_type:'chat'},body:{mid:'mid.command',text:'/тестопрос-сегодня'}}}}
-test('explicit scoped permission keeps general writes disabled; missing durable mount fails closed',()=>{
- assert.equal(settings({}),null);assert.equal(settings({...env,TRAINING_TEST_AUTOPOST_ENABLED:'false'}),null);
- assert(settings({...env,TRAINING_TEST_AUTOPOST_STATE_DIR:'/data/polls'}));
- for(const patch of [{BOT_MODE:'production'},{CHAT_IDS:'-1'},{TEST_ALLOW_SEND:'true'},{TEST_ALLOW_EDIT:'true'},{TEST_ALLOW_DELETE:'true'},{AUTO_PUBLISH:'true'},{TRAINING_TEST_AUTOPOST_DURABLE_VOLUME:'false'},{TRAINING_TEST_AUTOPOST_STATE_DIR:'relative'},{TRAINING_TEST_AUTOPOST_STATE_DIR:'/'},{TRAINING_TEST_AUTOPOST_ENABLED:'yes'}])assert.throws(()=>settings({...env,TRAINING_TEST_AUTOPOST_STATE_DIR:'/data/polls',...patch}));
+test('Firestore test scope requires no persistent disk and never widens general flags',()=>{
+ assert.equal(settings({}),null);assert.equal(settings({...env,TRAINING_TEST_AUTOPOST_ENABLED:'false'}),null);assert(settings(env));
+ assert(settings({...env,TRAINING_TEST_AUTOPOST_STATE_DIR:'ignored-legacy-path',TRAINING_TEST_AUTOPOST_DURABLE_VOLUME:'false'}));
+ for(const patch of [{BOT_MODE:'production'},{CHAT_IDS:'-1'},{FIREBASE_PROJECT_ID:'fitpp'},{TEST_ALLOW_SEND:'true'},{TEST_ALLOW_EDIT:'true'},{TEST_ALLOW_DELETE:'true'},{AUTO_PUBLISH:'true'},{TRAINING_TEST_AUTOPOST_STORAGE:'local'},{TRAINING_TEST_AUTOPOST_ENABLED:'yes'}])assert.throws(()=>settings({...env,...patch}));
 });
-test('all seven days use Moscow 10:00 and the existing exact renderer',async t=>{
+test('all seven days cross 10:00 Moscow only once and retain existing exact body/buttons',async t=>{
  for(let day=2;day<=8;day++){
-  const date=`2026-11-0${day}`,f=fixture(t,date+'T06:59:59Z');await f.s.tick();assert.equal(f.calls.send.length,0);
-  f.time(date+'T07:00:00Z');await Promise.all([f.s.tick(),f.s.tick()]);
-  assert.equal(f.calls.send.length,day===6?0:1);
-  if(day!==6){const p=f.s.store.state.polls[date],b=body({...p,votes:new Map()});assert.match(b.text,new RegExp(['20:00','18:30','20:00','18:30','','18:00','18:00'][day-2]));assert.match(b.text,/🤨 Пока никто не записался!/);assert.doesNotMatch(b.text,/2026|60 минут|[━─]/);assert.deepEqual(b.attachments[0].payload.buttons[0].map(b=>b.text),['✅ Приду','↩️ Отменить']);if([2,4].includes(day))assert.match(b.text,/<b>Заря<\/b>/);if([3,5].includes(day))assert.match(b.text,/<b>Поле чудес<\/b>/);if(day>=7)assert.match(b.text,/35289250295816/)}
+  const date=`2026-11-0${day}`,f=fixture(t,date+'T06:59:59Z');await f.s.tick();assert.equal(f.calls.send.length,0);f.time(date+'T07:00:00Z');await Promise.all([f.s.tick(),f.s.tick()]);assert.equal(f.calls.send.length,day===6?0:1);
+  if(day!==6){const p=await f.s.store.read(date),b=pollBody(p);assert.match(b.text,new RegExp(['20:00','18:30','20:00','18:30','','18:00','18:00'][day-2]));assert.match(b.text,/🤨 Пока никто не записался!/);assert.doesNotMatch(b.text,/2026|60 минут|[━─]/);assert.deepEqual(b.attachments[0].payload.buttons[0].map(b=>b.text),['✅ Приду','↩️ Отменить']);if([2,4].includes(day))assert.match(b.text,/<b>Заря<\/b>/);if([3,5].includes(day))assert.match(b.text,/<b>Поле чудес<\/b>/);if(day>=7)assert.match(b.text,/35289250295816/)}
  }
 });
-test('late startup, missed minute, previous date, early startup and training end never catch up',async t=>{
+test('late startup, missed minute, historical date and training start never catch up',async t=>{
  for(const time of ['2026-11-02T07:00:00.001Z','2026-11-02T08:00:00Z']){const f=fixture(t,time);await f.s.tick();assert.equal(f.calls.send.length,0)}
- const f=fixture(t);f.time('2026-11-02T07:01:00Z');await f.s.tick();assert.equal(f.calls.send.length,0);
- await f.s.publish('2026-11-01');assert.equal(f.calls.send.length,0);
- f.time('2026-11-02T17:00:00Z');await f.s.receive(command(Date.parse('2026-11-02T17:00:00Z')));assert.equal(f.calls.send.length,0);
+ const f=fixture(t);f.time('2026-11-02T07:01:00Z');await f.s.tick();await f.s.publish('2026-11-01');assert.equal(f.calls.send.length,0);f.time('2026-11-02T17:00:00Z');await f.s.receive(command(Date.parse('2026-11-02T17:00:00Z')));assert.equal(f.calls.send.length,0);
 });
-test('persisted reservation prevents concurrency and restart duplicates',async t=>{
- const f=fixture(t);f.time('2026-11-02T07:00:00Z');await Promise.all([f.s.tick(),f.s.tick()]);assert.equal(f.calls.send.length,1);
- await f.s.close();f.restart();await f.s.tick();await f.s.receive(command(Date.parse('2026-11-02T07:00:00Z')));assert.equal(f.calls.send.length,1);
- assert.throws(()=>initialize(f.dir,'2026-10-26'));
+test('two instances and new process share atomic reservation; restart needs no disk',async t=>{
+ const db=database(),a=fixture(t,undefined,db),b=fixture(t,undefined,db);a.time('2026-11-02T07:00:00Z');b.time('2026-11-02T07:00:00Z');
+ await Promise.all([a.s.tick(),b.s.tick()]);assert.equal(a.calls.send.length+b.calls.send.length,1);
+ await a.s.close();a.restart();await a.s.tick();await a.s.publish('2026-11-02');assert.equal(a.calls.send.length+b.calls.send.length,1);
 });
-test('timeout, malformed success and HTTP errors stay uncertain after restart',async t=>{
- for(const result of ['timeout','malformed','http']){
-  const f=fixture(t);f.api.send=async p=>{f.calls.send.push(p);if(result==='malformed')return '';throw Error('SECRET_TOKEN PRIVATE_NAME')};
-  f.time('2026-11-02T07:00:00Z');await f.s.tick();assert.equal(f.s.store.state.polls['2026-11-02'].status,'uncertain');
-  await f.s.close();f.restart();await f.s.tick();await f.s.publish('2026-11-02');assert.equal(f.calls.send.length,1);assert.doesNotMatch(f.logs.join(' '),/SECRET|PRIVATE/);
- }
+test('timeout, HTTP failure and malformed MAX success block all future sends durably',async t=>{
+ for(const mode of ['timeout','http','malformed']){const f=fixture(t);f.api.send=async p=>{f.calls.send.push(p);if(mode==='malformed')return '';throw Error('PRIVATE_TOKEN')};f.time('2026-11-02T07:00:00Z');await f.s.tick();assert.equal((await f.s.store.read('2026-11-02')).status,'uncertain');await f.s.close();f.restart();await f.s.tick();await f.s.publish('2026-11-02');assert.equal(f.calls.send.length,1);assert.doesNotMatch(f.logs.join(' '),/PRIVATE_TOKEN/)}
 });
-test('crash-equivalent reserved receipt blocks a later process and exclusive writer lock',async t=>{
- const f=fixture(t);assert.throws(()=>open({dir:f.dir}));f.s.store.state.polls['2026-11-02']={...f.s.store.state.polls[POLL.date],date:'2026-11-02',status:'reserved',mid:null};f.s.store.save();
- await f.s.close();f.restart();f.time('2026-11-02T07:00:00Z');await f.s.tick();assert.equal(f.calls.send.length,0);
+test('lost reservation acknowledgement commits a durable block but dispatches zero MAX requests',async t=>{
+ const f=fixture(t);f.db.setFail('ack');f.time('2026-11-02T07:00:00Z');await assert.rejects(f.s.tick(),/ACK/);assert.equal(f.calls.send.length,0);assert.equal((await f.s.store.read('2026-11-02')).status,'reserved');await f.s.close();f.restart();await f.s.publish('2026-11-02');assert.equal(f.calls.send.length,0);
 });
-test('missing/corrupt ledger, symlink and existing pilot removal fail closed',async t=>{
- const f=fixture(t);await f.s.close();const file=path.join(f.dir,'state.json'),bytes=fs.readFileSync(file);
- fs.unlinkSync(file);assert.throws(()=>open({dir:f.dir}));fs.writeFileSync(file,'bad');assert.throws(()=>open({dir:f.dir}));
- const s=JSON.parse(bytes);delete s.polls[POLL.date];fs.writeFileSync(file,JSON.stringify(s));assert.throws(()=>open({dir:f.dir}));
- fs.writeFileSync(file,bytes);fs.symlinkSync(file,path.join(f.dir,'link'));assert.throws(()=>open({dir:f.dir}));
+test('lost successful-send persistence leaves reserved/published and never repeats POST',async t=>{
+ for(const mode of ['write','ack']){const f=fixture(t);const original=f.api.send;f.api.send=async p=>{const mid=await original(p);f.db.setFail(mode);return mid};f.time('2026-11-02T07:00:00Z');await f.s.tick().catch(()=>{});f.db.setFail(null);await f.s.close();f.restart();await f.s.publish('2026-11-02');assert.equal(f.calls.send.length,1);assert(['reserved','published','uncertain'].includes((await f.s.store.read('2026-11-02')).status))}
 });
-test('existing today pilot is never duplicated and keeps its FitPP callback route',async t=>{
- const f=fixture(t,'2026-10-26T06:59:59Z');f.time('2026-10-26T07:00:00Z');await f.s.tick();await f.s.publish(POLL.date);assert.equal(f.calls.send.length,0);
- assert.equal(await f.s.receive(callback({...POLL,id:POLL.uuid})),false);
+test('permission failures never fall back to RAM or acknowledge unpersisted votes',async t=>{
+ const f=fixture(t);f.db.setFail('write');f.time('2026-11-02T07:00:00Z');await assert.rejects(f.s.tick(),/DENIED/);assert.equal(f.calls.send.length,0);assert.equal(await f.s.store.read('2026-11-02'),null);
+ f.db.setFail(null);await f.s.publish('2026-11-02');const p=await f.s.store.read('2026-11-02');f.time('2026-11-02T07:01:00Z');f.db.setFail('write');await assert.rejects(f.s.receive(callback(p)),/DENIED/);assert.deepEqual((await f.s.store.read(p.date)).votes,{});
 });
-test('manual today command requires explicit fresh test-group admin action and dedupes with scheduler',async t=>{
+test('manual command requires a fresh test-group admin and shares the durable guard',async t=>{
  const f=fixture(t,'2026-11-02T08:00:00Z');await f.s.tick();assert.equal(f.calls.send.length,0);
  for(const mutate of [u=>{u.message.sender.user_id=2},u=>{u.message.sender.is_bot=true},u=>{u.message.recipient.chat_id='-1'},u=>{u.message.timestamp-=61000},u=>{u.message.body.text='/тестопрос-сегодня 2026-11-03'}]){const u=command();mutate(u);await f.s.receive(u);assert.equal(f.calls.send.length,0)}
- await Promise.all([f.s.receive(command()),f.s.receive(command())]);assert.equal(f.calls.send.length,1);
- await f.s.close();f.restart();await f.s.receive(command());assert.equal(f.calls.send.length,1);
+ await Promise.all([f.s.receive(command()),f.s.receive(command())]);await f.s.close();f.restart();await f.s.receive(command());assert.equal(f.calls.send.length,1);
 });
-test('yes/cancel persist before ack; names, deduplication, ordering and edit retry survive restart',async t=>{
- const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=f.s.store.state.polls['2026-11-02'];f.time('2026-11-02T07:01:00Z');
- await f.s.receive(callback(p));await f.s.receive(callback(p));assert.equal(p.votes.length,1);assert.equal(p.done.length,1);
- const saved=JSON.parse(fs.readFileSync(path.join(f.dir,'state.json')));assert.equal(saved.polls[p.date].votes.length,1);
- f.api.edit=async()=>{throw Error('SECRET PRIVATE')};await f.s.tick();assert(p.dirty);assert.equal(f.logs.at(-1),'Training Test: PUT /messages failed; edit will retry.');
- await f.s.close();f.restart();f.api.edit=async p=>f.calls.edit.push(body({...p,votes:new Map(p.votes)}));await f.s.tick();assert.match(f.calls.edit.at(-1).text,/1. Елена &lt;&amp;&gt;/);
- const current=f.s.store.state.polls[p.date];await f.s.receive(callback(current,'cancel','cancel',Date.parse('2026-11-02T07:01:01Z')));assert.equal(current.votes.length,0);
- await f.s.receive(callback(current,'stale','yes'));assert.equal(current.votes.length,0);await f.s.tick();assert.match(f.calls.edit.at(-1).text,/🤨 Пока никто не записался!/);
- assert.equal(f.calls.send.length,1);
+test('yes/cancel receipts, names, stale-event protection and dirty edits survive restart',async t=>{
+ const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=await f.s.store.read('2026-11-02');f.time('2026-11-02T07:01:00Z');await f.s.receive(callback(p));await f.s.receive(callback(p));assert.equal((await f.s.store.read(p.date)).revision,1);
+ f.api.edit=async()=>{throw Error('PRIVATE_TOKEN')};await f.s.tick();assert.equal(f.logs.at(-1),'Training Test: PUT /messages failed; edit will retry.');
+ await f.s.close();f.restart();f.api.edit=async(p,{beforePut})=>{await beforePut();f.calls.edit.push(pollBody(p))};await f.s.tick();assert.match(f.calls.edit.at(-1).text,/1. Елена &lt;&amp;&gt;/);
+ await f.s.receive(callback(p,'cancel','cancel',Date.parse('2026-11-02T07:01:01Z')));await f.s.receive(callback(p,'stale','yes'));await f.s.tick();const current=await f.s.store.read(p.date);assert.deepEqual(current.votes,{});assert.equal(current.revision,2);assert.equal(current.displayedRevision,2);assert.match(f.calls.edit.at(-1).text,/🤨 Пока никто не записался!/);
 });
-test('foreign message/group/bot users and stale callbacks cannot mutate votes',async t=>{
- const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=f.s.store.state.polls['2026-11-02'];f.time('2026-11-02T07:01:00Z');
- for(const mutate of [u=>{u.message.body.mid='mid.foreign'},u=>{u.message.recipient.chat_id='-1'},u=>{u.callback.user.is_bot=true},u=>{u.callback.timestamp-=86400001},u=>{u.callback.user.user_id=0}]){const u=callback(p);mutate(u);await f.s.receive(u);assert.equal(p.votes.length,0)}
+test('simultaneous votes in separate processes retain both participants and event receipts',async t=>{
+ const db=database(),a=fixture(t,undefined,db),b=fixture(t,undefined,db);a.time('2026-11-02T07:00:00Z');await a.s.tick();const p=await a.s.store.read('2026-11-02');a.time('2026-11-02T07:01:00Z');b.time('2026-11-02T07:01:00Z');const one=callback(p),two=callback(p,'b');two.callback.user={user_id:2,is_bot:false,first_name:'Анна'};
+ await Promise.all([a.s.receive(one),b.s.receive(two)]);const saved=await a.s.store.read(p.date);assert.equal(saved.revision,2);assert.equal(saved.order.length,2);assert.equal(db.commits.filter(p=>p.includes('/events/')).length,2);
 });
-test('failed durable reservation never dispatches; failed vote persistence never acknowledges',async t=>{
- const f=fixture(t);f.time('2026-11-02T07:00:00Z');f.s.store.save=()=>{f.s.store.failed=true;throw Error('DISK_FULL')};await assert.rejects(f.s.tick());assert.equal(f.calls.send.length,0);await assert.rejects(f.s.tick());
- const g=fixture(t);g.time('2026-11-02T07:00:00Z');await g.s.tick();g.time('2026-11-02T07:01:00Z');const p=g.s.store.state.polls['2026-11-02'];g.s.store.save=()=>{g.s.store.failed=true;throw Error('DISK_FULL')};await assert.rejects(g.s.receive(callback(p)));await assert.rejects(g.s.tick());
+test('edit lease prevents competing PUT; a concurrent vote stays dirty until repaired',async t=>{
+ const db=database(),a=fixture(t,undefined,db),b=fixture(t,undefined,db);a.time('2026-11-02T07:00:00Z');await a.s.tick();const p=await a.s.store.read('2026-11-02');a.time('2026-11-02T07:01:00Z');b.time('2026-11-02T07:01:00Z');await a.s.receive(callback(p));let release;const gate=new Promise(r=>release=r);a.api.edit=async()=>{await gate};const edit=a.s.tick();await new Promise(r=>setTimeout(r,10));await b.s.tick();assert.equal(b.calls.edit.length,0);
+ await b.s.receive(callback(p,'newer','cancel',Date.parse('2026-11-02T07:01:01Z')));release();await edit;let saved=await a.s.store.read(p.date);assert.equal(saved.revision,2);assert.equal(saved.displayedRevision,1);await b.s.tick();saved=await b.s.store.read(p.date);assert.equal(saved.displayedRevision,2);
+});
+test('expired edit lease recovers after crash and cannot dispatch a stale PUT',async t=>{
+ const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=await f.s.store.read('2026-11-02');f.time('2026-11-02T07:01:00Z');await f.s.receive(callback(p));const claimed=await f.s.store.claimEdit(p.date);await f.s.close();f.time('2026-11-02T07:04:00Z');f.restart();await assert.rejects(f.s.store.checkEdit(p.date,claimed.editLease.token),/EXPIRED/);await f.s.tick();assert.equal(f.calls.edit.length,1);
+});
+test('existing pilot bypasses Firestore and still blocks a duplicate today',async t=>{
+ const f=fixture(t,'2026-10-26T06:59:59Z');f.time('2026-10-26T07:00:00Z');await f.s.tick();await f.s.publish(POLL.date);assert.equal(f.calls.send.length,0);assert.equal(await f.s.receive(callback({...POLL,id:POLL.uuid})),false);assert.equal(f.db.paths.length,0);
+});
+test('votes remain open during 60-minute training then close; foreign users/messages never mutate',async t=>{
+ const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=await f.s.store.read('2026-11-02');f.time('2026-11-02T07:01:00Z');
+ for(const mutate of [u=>{u.message.body.mid='mid.foreign'},u=>{u.message.recipient.chat_id='-1'},u=>{u.callback.user.is_bot=true},u=>{u.callback.timestamp-=86400001}]){const u=callback(p);mutate(u);await f.s.receive(u);assert.deepEqual((await f.s.store.read(p.date)).votes,{})}
+ f.time('2026-11-02T17:30:00Z');await f.s.receive(callback(p,'during','yes',Date.parse('2026-11-02T17:30:00Z')));f.time('2026-11-02T18:00:00Z');await f.s.receive(callback(p,'closed','cancel',Date.parse('2026-11-02T18:00:00Z')));assert.equal(Object.keys((await f.s.store.read(p.date)).votes).length,1);
+});
+test('1000ms scheduler avoids backlog; FitPP/contact traffic bypasses publication queue',async t=>{
+ const f=fixture(t);let interval,cancelled=false;const stop=attach(f.s,{schedule(fn,ms){interval={fn,ms};return 1},cancel(){cancelled=true}});assert.equal(interval.ms,1000);let release;const pending=f.s.run(()=>new Promise(r=>release=r));await new Promise(r=>setImmediate(r));assert.equal(await f.s.receive({update_type:'bot_started'}),false);assert.equal(await f.s.receive(callback({...POLL,id:POLL.uuid})),false);release();await pending;await stop();assert(cancelled);
 });
 function rawFixture(){
- const requests=[],p={id:'a'.repeat(8)+'-aaaa-aaaa-aaaa-'+ 'a'.repeat(12),date:'2026-11-02',votes:[],mid:'mid.test',status:'published'};
+ const requests=[],p={id:'a'.repeat(8)+'-aaaa-aaaa-aaaa-'+ 'a'.repeat(12),date:'2026-11-02',votes:{},order:[],mid:'mid.test',status:'published'};
  let me={user_id:123,username:'id623401053090_1_bot',is_bot:true},chat={chat_id:CHAT,title:'Тест тренировок'},member={user_id:123,is_bot:true};
  let message={sender:me,recipient:{chat_id:CHAT},body:{mid:p.mid,attachments:body({...p,votes:new Map()}).attachments}};
  return {requests,p,setMe:v=>me=v,setChat:v=>chat=v,setMember:v=>member=v,setMessage:v=>message=v,raw:{async request(method,url){requests.push([method,url]);return url==='/me'?me:url.endsWith('/members/me')?member:url.startsWith('/chats/')?chat:message},async send(chat,b,opts){requests.push(['POST',chat,b,opts]);return 'mid.test'},async edit(mid,b){requests.push(['PUT',mid,b])}}};
@@ -98,11 +93,6 @@ test('capability rechecks identity before every send, pins chat and verifies edi
 test('wrong bot, chat, membership, edit sender/recipient/keyboards cannot write',async()=>{
  for(const patch of [r=>r.setMe({user_id:124,username:'id623401053090_1_bot',is_bot:true}),r=>r.setMe({user_id:123,username:'id623401053090_1_bot',is_bot:false}),r=>r.setChat({chat_id:'-1',title:'Тест тренировок'}),r=>r.setChat({chat_id:CHAT,title:'Рабочая группа'}),r=>r.setMember({user_id:124,is_bot:true})]){const r=rawFixture();patch(r);await assert.rejects(capability({expectedId:'123'},{raw:r.raw}));assert(!r.requests.some(x=>['POST','PUT','DELETE'].includes(x[0])))}
  for(const m of [{},{sender:{user_id:123,is_bot:true},recipient:{chat_id:'-1'},body:{mid:'mid.test'}},{sender:{user_id:124,is_bot:true},recipient:{chat_id:CHAT},body:{mid:'mid.test',attachments:[]}}]){const r=rawFixture(),a=await capability({expectedId:'123'},{raw:r.raw});r.setMessage(m);await assert.rejects(a.edit(r.p),/SCOPE/);assert(!r.requests.some(x=>x[0]==='PUT'))}
-});
-test('scheduler uses 1000ms and no backlog; foreign FitPP traffic bypasses publication queue',async t=>{
- const f=fixture(t);let interval,cancelled=false;const stop=attach(f.s,{schedule(fn,ms){interval={fn,ms};return 1},cancel(){cancelled=true}});assert.equal(interval.ms,1000);
- let release;const pending=f.s.run(()=>new Promise(resolve=>{release=resolve}));await new Promise(r=>setImmediate(r));
- assert.equal(await f.s.receive({update_type:'bot_started'}),false);assert.equal(await f.s.receive(callback({...POLL,id:POLL.uuid})),false);release();await pending;await stop();assert(cancelled);
 });
 
 test('authenticated shared webhook routes new polls, old FitPP pilot and contacts independently',async t=>{
@@ -120,23 +110,9 @@ test('authenticated shared webhook routes new polls, old FitPP pilot and contact
  }
  f.time('2026-11-02T08:00:00Z');assert.equal(await request(command(),'wrong_secret'),403);assert.equal(f.calls.send.length,0);
  assert.equal(await request(command()),200);assert.equal(f.calls.send.length,1);
- const p=f.s.store.state.polls['2026-11-02'];const vote=callback(p,'join','yes',Date.parse('2026-11-02T08:00:00Z'));assert.equal(await request(vote),200);
- assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'state.json'))).polls[p.date].votes.length,1);assert.equal(commits,0);
+ const p=await f.s.store.read('2026-11-02');const vote=callback(p,'join','yes',Date.parse('2026-11-02T08:00:00Z'));assert.equal(await request(vote),200);
+ assert.equal(Object.keys((await f.s.store.read(p.date)).votes).length,1);assert.equal(commits,0);
  const old=callback({...POLL,id:POLL.uuid},'pilot','yes',Date.now());old.callback.user.user_id=5819064;
  assert.equal(await request(old),200);assert.equal(commits,1);
  assert.equal(await request({update_type:'bot_started'}),200);assert.equal(contacts,1);
-});
-
-test('lost ledger acknowledgement after successful POST leaves a reservation and never resends',async t=>{
- const f=fixture(t);let saves=0;const save=f.s.store.save.bind(f.s.store);
- f.s.store.save=()=>{if(++saves===1)return save();f.s.store.failed=true;throw Error('DISK_LOST')};
- f.time('2026-11-02T07:00:00Z');await assert.rejects(f.s.tick());assert.equal(f.calls.send.length,1);
- assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'state.json'))).polls['2026-11-02'].status,'reserved');
- await f.s.close();f.restart();await f.s.tick();await f.s.publish('2026-11-02');assert.equal(f.calls.send.length,1);
-});
-
-test('votes remain open during the 60 minute workout, then close as the existing direct pilot does',async t=>{
- const f=fixture(t);f.time('2026-11-02T07:00:00Z');await f.s.tick();const p=f.s.store.state.polls['2026-11-02'];
- f.time('2026-11-02T17:30:00Z');await f.s.receive(callback(p,'during','yes',Date.parse('2026-11-02T17:30:00Z')));assert.equal(p.votes.length,1);await f.s.tick();assert.equal(p.dirty,false);
- f.time('2026-11-02T18:00:00Z');await f.s.receive(callback(p,'closed','cancel',Date.parse('2026-11-02T18:00:00Z')));assert.equal(p.votes.length,1);
 });

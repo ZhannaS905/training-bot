@@ -1,6 +1,7 @@
 'use strict';
 // Dedicated capability; general MAX write flags and Firebase adapters stay unchanged.
 const {randomUUID}=require('node:crypto');
+const {at}=require('./fitpp-direct-diagnostic');
 const {MaxApi}=require('./api');
 const {CHAT,config,body}=require('./memory-training-test');
 const {checkTestBotIdentity,identityAccepted}=require('./test-bot-identity');
@@ -100,12 +101,15 @@ class Autopost{
  close(){if(!this.closeFlight)this.closeFlight=(async()=>{await this.tail;this.stopped=true;await this.store.close()})();return this.closeFlight}
 }
 async function prepare({env=process.env,storeFactory,now,raw}={}){
- const c=settings(env);if(!c)return null;
- if(typeof storeFactory!=='function')throw Error('AUTOPOST_FIRESTORE_REQUIRED');
- const api=await capability(c,{raw});
- const store=storeFactory(c.expectedId,{writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true'});
+ const c=await at('AUTOPOST_SETTINGS',()=>settings(env));if(!c)return null;
+ await at('AUTOPOST_STORE_FACTORY',()=>{if(typeof storeFactory!=='function')throw Error('AUTOPOST_FIRESTORE_REQUIRED')});
+ const api=await at('AUTOPOST_MAX_IDENTITY',()=>capability(c,{raw}));
+ const store=await at('AUTOPOST_STORE_FACTORY',()=>{
+  if(typeof storeFactory!=='function')throw Error('AUTOPOST_FIRESTORE_REQUIRED');
+  return storeFactory(c.expectedId,{writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true'});
+ });
  // Server-only read, no local cache fallback and no startup writes.
- await store.read(moscow(now?now():new Date()).date);
+ await at('AUTOPOST_FIRST_READ',()=>store.read(moscow(now?now():new Date()).date));
  return new Autopost({store,api,admins:c.admins,now});
 }
 function attach(service,{schedule=setInterval,cancel=clearInterval}={}){

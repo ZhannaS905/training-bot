@@ -41,7 +41,7 @@ test('prepare uses verified existing session factory, server read only, without 
  const db=database(),env={BOT_MODE:'test',CHAT_IDS:POLL.chat,TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',TRAINING_TEST_AUTOPOST_ENABLED:'true',FIREBASE_PROJECT_ID:'fitpp-test'};
  const calls=[],raw={async request(method,p){assert.equal(method,'GET');return p==='/me'?{user_id:123,username:'id623401053090_1_bot',is_bot:true}:p.endsWith('/members/me')?{user_id:123,is_bot:true}:{chat_id:POLL.chat,title:'Тест тренировок'}}};
  const s=await prepare({env,now:()=>new Date(date),raw,storeFactory:(id,options)=>{calls.push(id);assert(options.writeEnabled());return db.store(options)}});assert.deepEqual(calls,['123']);assert.equal(db.commits.length,0);assert.equal(db.paths.length,1);await s.close();
- db.setFail('read');await assert.rejects(prepare({env,raw,storeFactory:()=>db.store()}),/READ_DENIED/);
+ db.setFail('read');await assert.rejects(prepare({env,raw,storeFactory:()=>db.store()}),error=>require('../src/fitpp-direct-diagnostic').format(error)==='stage=AUTOPOST_FIRST_READ reason=UNKNOWN');
  assert.equal(await prepare({env:{}}),null);await assert.rejects(prepare({env}),/FIRESTORE_REQUIRED/);
 });
 

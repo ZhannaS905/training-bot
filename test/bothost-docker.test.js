@@ -93,7 +93,7 @@ test('relocated files stay usable with a separate empty /app mount; no wrapper i
       cwd: app, env: { BOT_MODE: 'test', FITPP_DIRECT_ENABLED: 'false', FITPP_DIRECT_WRITES_ENABLED: 'false' }, encoding: 'utf8'
     });
     assert.equal(disabled.status, 1);
-    assert.equal(disabled.stderr.trim(), entry === 'direct-preflight.cjs' ? 'DIRECT_READ_PREFLIGHT_REJECTED stage=SETTINGS reason=DIRECT_DISABLED' : 'DIRECT_STARTUP_REJECTED');
+    assert.equal(disabled.stderr.trim(), entry === 'direct-preflight.cjs' ? 'DIRECT_READ_PREFLIGHT_REJECTED stage=SETTINGS reason=DIRECT_DISABLED' : 'DIRECT_STARTUP_REJECTED stage=SETTINGS reason=DIRECT_DISABLED');
     assert.equal(disabled.stdout, '');
   }
   assert.deepEqual(fs.readdirSync(app), []);

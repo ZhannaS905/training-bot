@@ -3,6 +3,7 @@ const {test}=require('node:test'),a=require('node:assert/strict'),vm=require('no
 test('deployed Docker entrypoint starts poll runtime with contact enabled through the same bridge',async()=>{
  const calls=[],sdk={};const env={CONTACT_LINK_ENABLED:'true'};
  const fakeRequire=id=>{
+  if(id==='./src/fitpp-direct-diagnostic')return require('../src/fitpp-direct-diagnostic');
   if(id==='node:module')return {createRequire:()=>name=>{calls.push(name);return sdk}};
   if(id==='node:path')return path;
   if(id==='./src/training-test-autopost')return {settings:()=>null,prepare:async()=>null};
@@ -22,6 +23,7 @@ test('entrypoint passes shared Firestore factory and drains autopost before clos
  const {EventEmitter}=require('node:events'),server=new EventEmitter(),calls=[];let release;
  const gate=new Promise(resolve=>release=resolve),factory=()=>{};
  const fakeRequire=id=>{
+  if(id==='./src/fitpp-direct-diagnostic')return require('../src/fitpp-direct-diagnostic');
   if(id==='node:module')return {createRequire:()=>()=>({})};if(id==='node:path')return path;
   if(id==='./src/fitpp-direct-session')return {settings(){}};
   if(id==='./src/fitpp-direct-runtime')return {prepare:async()=>({autopostStore:factory,close:async()=>calls.push('session-closed')})};

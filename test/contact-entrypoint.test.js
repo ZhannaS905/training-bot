@@ -16,7 +16,7 @@ test('deployed Docker entrypoint starts poll runtime with contact enabled throug
  vm.runInNewContext(fs.readFileSync('direct-training-test.cjs','utf8'),context);
  a.ok(await context.module.exports.main({env}));
  a.deepEqual(calls,['settings','firebase/app','firebase/auth','firebase/firestore','prepare','bridge']);
- a.match(fs.readFileSync('Dockerfile','utf8'),/CMD \["node", "\/opt\/training-test\/direct-training-test.cjs"\]/);
+ a.match(fs.readFileSync('Dockerfile','utf8'),/CMD \["node", "\/opt\/training-test\/training-test-supervisor.cjs"\]/);
 });
 
 test('entrypoint passes shared Firestore factory and drains autopost before closing Firebase',async()=>{

@@ -23,7 +23,7 @@ test('Dockerfile selects Node 22, explicit safe entrypoint and code outside /app
   const text = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
   assert.match(text, /^FROM node:22-bookworm-slim$/m);
   assert.match(text, /^WORKDIR \/opt\/training-test$/m);
-  assert.match(text, /^CMD \["node", "\/opt\/training-test\/direct-training-test.cjs"\]$/m);
+  assert.match(text, /^CMD \["node", "\/opt\/training-test\/training-test-supervisor.cjs"\]$/m);
   assert.match(text, /^USER node$/m); assert.match(text, /^EXPOSE 3000$/m);
   assert(!text.includes('http-wrapper.js')); assert(!/^COPY \.\s/m.test(text));
   for (const setting of ['TEST_ALLOW_DELETE=false', 'TEST_ALLOW_SEND=false',

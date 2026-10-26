@@ -97,6 +97,7 @@ test('actual preview CLI loads shared helpers before delegation and hides transp
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const hook=path.join(dir,'offline.cjs');
   fs.writeFileSync(hook,`const fs=require('node:fs');
+require(require('node:path').join(process.cwd(),'src/fitpp-notification-lock.cjs')).acquire=async()=>({close(){}});
 const stat=fs.statSync,mkdir=fs.mkdirSync,read=fs.readFileSync;
 fs.readFileSync=function(p,...args){if(p==='/app/data/.fitpp-notification-volume')return 'fitpp-test:synthetic-v1:training-test:v1';return read.call(this,p,...args)};
 fs.statSync=function(p,...args){return p==='/app/data'?{isDirectory:()=>true}:stat.call(this,p,...args)};

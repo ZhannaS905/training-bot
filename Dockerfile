@@ -7,7 +7,7 @@ COPY direct-sdk/package.json direct-sdk/package-lock.json ./direct-sdk/
 RUN npm ci --prefix direct-sdk --omit=dev --ignore-scripts --no-audit --no-fund --engine-strict
 COPY memory-training-test.cjs direct-preflight.cjs direct-training-test.cjs ./
 COPY fitpp-notification-preview.cjs fitpp-notification-test.cjs ./
-COPY training-test-autopost-state.cjs ./
+COPY training-test-autopost-state.cjs training-test-supervisor.cjs ./
 COPY src/ ./src/
 COPY direct-core/ ./direct-core/
 COPY certs/russian-trusted-root-ca.pem ./certs/
@@ -19,4 +19,4 @@ ENV NODE_ENV=production BOT_MODE=test CHAT_IDS=-80345864298680 \
 USER node
 EXPOSE 3000
 STOPSIGNAL SIGTERM
-CMD ["node", "/opt/training-test/direct-training-test.cjs"]
+CMD ["node", "/opt/training-test/training-test-supervisor.cjs"]

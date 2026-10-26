@@ -42,5 +42,5 @@ async function main(env=process.env,args=process.argv.slice(2),{
     await wait(30000);
   } while(true);
 }
-if(require.main===module)main().catch(()=>{console.error('FITPP_NOTIFICATION_STOPPED verification_or_io_failed no_automatic_retry');process.exitCode=1});
+if(require.main===module)(async()=>{let lock;try{if(process.argv.slice(2).join(' ')==='--send --watch')lock=await require('./src/fitpp-notification-lock.cjs').acquire();await main()}finally{lock?.close()}})().catch(()=>{console.error('FITPP_NOTIFICATION_STOPPED verification_or_io_failed no_automatic_retry');process.exitCode=1});
 module.exports={main};

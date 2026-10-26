@@ -119,7 +119,7 @@ async function main(env = process.env, args = process.argv.slice(2), {
 // Publish shared read helpers before CLI delegation loads the prepared watcher.
 module.exports = { decode, decodeFields, config, signIn, readBoth, main };
 if (require.main === module) {
-  main().catch(error => {
+  (async()=>{let lock;try{if(process.argv.slice(2).join(' ')==='--send --watch')lock=await require('./src/fitpp-notification-lock.cjs').acquire();await main()}finally{lock?.close()}})().catch(error => {
     const safe = /^(PROJECT_REFUSED|CONFIG_MISSING|UID_REFUSED|TOKEN_REFUSED|STATE_REFUSED|BINDING_REFUSED|PATH_REFUSED|ARGUMENT_REFUSED|HTTP_[1-5][0-9][0-9])$/.test(error?.message || '')
       ? error.message : 'CHECK_FAILED';
     console.error((process.argv.slice(2).includes('--send') ? 'FITPP_NOTIFICATION_FAILED ' : 'FITPP_DRY_RUN_FAILED ') + safe);

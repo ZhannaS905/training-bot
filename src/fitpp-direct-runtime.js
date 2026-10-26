@@ -9,7 +9,10 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
  await at('SETTINGS',()=>settings(env));
  const directEnv={...env,FITPP_BRIDGE_URL:'https://direct.invalid/bot/update'};
  const s=await at('BRIDGE_SETTINGS',()=>bridge.settings(directEnv));
- const checkTime=()=>{if(now()>=POLL.closesAt)throw Error('POLL_CLOSED')};
+ // The historical pilot still rejects late votes in its service. Daily local polls
+ // must not inherit that single pilot's startup expiry. No booking scope is widened.
+ const autopost=require('./training-test-autopost').settings(env);
+ const checkTime=()=>{if(!autopost&&now()>=POLL.closesAt)throw Error('POLL_CLOSED')};
  const openedAt=Number(env.FITPP_DIRECT_POLL_OPENED_AT);
  await at('POLL_TIME',()=>{if(!/^\d+$/.test(env.FITPP_DIRECT_POLL_OPENED_AT||'')||!Number.isSafeInteger(openedAt)||openedAt>=POLL.closesAt||openedAt>now())throw Error('POLL_OPEN_TIME_REQUIRED')});
  await at('SCOPE',()=>{if(s.scope.chat!==POLL.chat||s.scope.mid!==POLL.mid||s.scope.uuid!==POLL.uuid||String(s.scope.user)!=='5819064')throw Error('EXACT_SCOPE_REQUIRED')});

@@ -5,6 +5,7 @@ test('deployed Docker entrypoint starts poll runtime with contact enabled throug
  const fakeRequire=id=>{
   if(id==='node:module')return {createRequire:()=>name=>{calls.push(name);return sdk}};
   if(id==='node:path')return path;
+  if(id==='./src/training-test-autopost')return {settings:()=>null,prepare:async()=>null};
   if(id==='./src/fitpp-direct-session')return {settings:()=>calls.push('settings')};
   if(id==='./src/fitpp-direct-runtime')return {prepare:async options=>{a.equal(options.env,env);calls.push('prepare');return {contact:{},close:async()=>{}}}};
   if(id==='./src/fitpp-test-bridge')return {main:async options=>{a.ok(options.contact);calls.push('bridge');return {once:()=>{}}}};

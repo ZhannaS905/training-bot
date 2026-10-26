@@ -8,6 +8,7 @@
 !fitpp-notification-preview.cjs
 !direct-preflight.cjs
 !direct-training-test.cjs
+!training-test-autopost-state.cjs
 !src/
 !src/**
 !direct-core/

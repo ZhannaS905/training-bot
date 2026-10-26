@@ -60,7 +60,7 @@ function combinedReceiver({callbacks,contact,owner,clock=()=>performance.now()})
   if(!contact)await owner.receive(u);
  }};
 }
-async function main({env=process.env,verify=guardedApi,post=signedPost,makeServer=http.createServer,reconcile=startReconciliation,callbackTransport,contact}={}){
+async function main({env=process.env,verify=guardedApi,post=signedPost,makeServer=http.createServer,reconcile=startReconciliation,callbackTransport,contact,autopost}={}){
  const {s,c}=await at('CONFIG',()=>({s:settings(env),c:config(env)}));
  const api=await at('MAX_IDENTITY',()=>verify(c,undefined,s.pollSync?{pollScope:s.scope}:{}));
  const owner=ownerDialog(env,c.expectedId);
@@ -72,10 +72,14 @@ async function main({env=process.env,verify=guardedApi,post=signedPost,makeServe
  const loop=reconcile(optimistic?()=>at('BRIDGE_SNAPSHOT',()=>optimistic.refresh()):null,{onError:error=>console.error(format(error).replace('startup refused','reconciliation pending'))});
  const callbacks=receiver(s,{optimistic,...(callbackTransport?{transport:callbackTransport}:{})});
  // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
- const handler=createWebhook(combinedReceiver({callbacks,contact,owner}),c.secret).listeners('request')[0];
- const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:env.OWNER_DIALOG_ENABLED!=='true',pollDisplaySync:s.pollSync,pollDisplayReady:optimistic?optimistic.status().ready:null}));void handler(req,res)});
+ const existing=combinedReceiver({callbacks,contact,owner});
+ const incoming=autopost?{async receive(u){if(!await autopost.receive(u))await existing.receive(u)}}:existing;
+ const handler=createWebhook(incoming,c.secret).listeners('request')[0];
+ const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:env.OWNER_DIALOG_ENABLED!=='true',autopostEnabled:!!autopost,pollDisplaySync:s.pollSync,pollDisplayReady:optimistic?optimistic.status().ready:null}));void handler(req,res)});
  await at('LISTEN',()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)})).catch(error=>{loop.stop();throw error});
+ const closeAutopost=autopost?require('./training-test-autopost').attach(autopost):null;
+ if(closeAutopost)server.once('close',()=>void closeAutopost().catch(()=>console.error('AUTOPOST_CLOSE_FAILED')));
  const stop=()=>{loop.stop();server.close();server.closeIdleConnections?.()};process.once('SIGINT',stop);process.once('SIGTERM',stop);
- console.log('Training Test: verified identity/chat; exact-poll bridge ready; poll display sync '+(s.pollSync?'enabled':'disabled')+'; no poll publication.');return server;
+ console.log('Training Test: verified identity/chat; exact-poll bridge ready; poll display sync '+(s.pollSync?'enabled':'disabled')+(autopost?'; scheduled test polls enabled.':'; no poll publication.'));return server;
 }
 module.exports={combinedReceiver,settings,receiver,signedPost,startReconciliation,main};

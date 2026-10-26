@@ -123,3 +123,10 @@ test('diagnostics never format arbitrary properties or external text',async()=>{
  const f=fixture();f.sdk.signInWithEmailAndPassword=async()=>{throw Object.assign(Error('private-token'),{code:'auth/invalid-credential'})};
  await assert.rejects(()=>connect({env:env(),sdk:f.sdk}),e=>format(e)==='stage=CONNECT reason=auth/invalid-credential');
 });
+
+test('daily autopost can start after historical pilot closure without widening Firebase writes or pilot scope',async()=>{
+ const f=fullFixture(),config={...fullConfig(),TEST_BOT_TOKEN:'offline',TEST_EXPECTED_BOT_ID:'123',WEBHOOK_SECRET:'offline_secret_123',TRAINING_TEST_AUTOPOST_ENABLED:'true',TRAINING_TEST_AUTOPOST_DURABLE_VOLUME:'true',TRAINING_TEST_AUTOPOST_STATE_DIR:'/data/autopost'};
+ const s=await prepare({env:config,sdk:f.sdk,now:()=>POLL.closesAt+86400000});await s.close();
+ assert.deepEqual(f.calls,['init','login','logout','terminate','delete']);
+ const wrong=fullFixture();await assert.rejects(()=>prepare({env:{...config,FITPP_BRIDGE_SCOPE:JSON.stringify({...POLL,user:USER,mid:'mid.foreign'})},sdk:wrong.sdk,now:()=>POLL.closesAt+86400000}),/EXACT_SCOPE/);assert.deepEqual(wrong.calls,[]);
+});

@@ -26,3 +26,7 @@ jobs:
           node --check src/fitpp-notification-dry-run.cjs
           node --check fitpp-notification-preview.cjs
           node --test test/fitpp-notification-dry-run.test.js
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run complete repository test suite
+        run: npm test

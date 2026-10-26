@@ -1,0 +1,28 @@
+name: FitPP notification preview safety tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/fitpp-notification-dry-run.cjs'
+      - 'fitpp-notification-preview.cjs'
+      - 'test/fitpp-notification-dry-run.test.js'
+      - '.github/workflows/fitpp-notification-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safety-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check syntax and run isolated tests
+        run: |
+          node --check src/fitpp-notification-dry-run.cjs
+          node --check fitpp-notification-preview.cjs
+          node --test test/fitpp-notification-dry-run.test.js

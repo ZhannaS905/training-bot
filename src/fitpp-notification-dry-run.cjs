@@ -4,6 +4,8 @@
 // No Firestore writes, MAX calls, or bot-runtime imports.
 const TEST_BOT_ID = 131384398;
 const CLIENT_ID = 'demo-client-1';
+const EXPECTED_CHAT_ID = 126619382;
+const EXPECTED_USER_ID = 5819064;
 
 function findSubscription(state, clientId, subscriptionId) {
   const clients = state?.clients;
@@ -22,8 +24,7 @@ function validBinding(binding, clientId) {
       !Array.isArray(binding.bindings) || binding.bindings.length !== 1) return false;
   const row = binding.bindings[0];
   return row?.clientId === clientId && row.notificationsEnabled === true &&
-    Number.isSafeInteger(row.maxChatId) && row.maxChatId !== 0 &&
-    Number.isSafeInteger(row.maxUserId) && row.maxUserId > 0;
+    row.maxChatId === EXPECTED_CHAT_ID && row.maxUserId === EXPECTED_USER_ID;
 }
 
 function previewDeductions(before, after, binding) {
@@ -32,6 +33,12 @@ function previewDeductions(before, after, binding) {
   const prior = before.visitOps || {};
   const next = after.visitOps || {};
   const seen = new Set();
+  // Prevent a moved/copied historical operation from being interpreted as new.
+  const priorIds = new Set();
+  for (const clients of Object.values(prior)) {
+    const id = clients?.[CLIENT_ID]?.operationId;
+    if (typeof id === 'string') priorIds.add(id);
+  }
   const candidates = [];
   for (const [workoutId, clients] of Object.entries(next)) {
     if (!clients || typeof clients !== 'object' || Array.isArray(clients)) continue;
@@ -40,7 +47,7 @@ function previewDeductions(before, after, binding) {
     if (typeof op.operationId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(op.operationId) ||
         typeof op.subscriptionId !== 'string' || !op.subscriptionId) continue;
     // An existing operation is not new, including after restart or unrelated edits.
-    if (prior[workoutId]?.[CLIENT_ID]?.operationId === op.operationId) continue;
+    if (priorIds.has(op.operationId)) continue;
     if (seen.has(op.operationId)) return []; // ambiguous IDs: fail closed
     seen.add(op.operationId);
     const oldSub = findSubscription(before, CLIENT_ID, op.subscriptionId);

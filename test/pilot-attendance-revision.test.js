@@ -55,7 +55,7 @@ test('set, clear and retry obey attendance rules and refund exactly once',async(
  assert.deepEqual(s.read(),cleared);
  const remark={...s.request,operationId:'remark-attendance',expectedRevision:2};
  await s.api.confirm(remark,UID);const remarked=s.read();
- const result=session.check(remarked,binding);assert.equal(result.candidates.length,1);
- assert.notEqual(result.candidates[0].operationId,marked.visitOps[s.request.workoutId]['demo-client-1'].operationId);
+ const result=session.check(remarked,binding);assert.equal(result.candidates.length,0);
+ assert.notEqual(remarked.visitOps[s.request.workoutId]['demo-client-1'].operationId,marked.visitOps[s.request.workoutId]['demo-client-1'].operationId);
  assert.equal(session.check(remarked,binding).candidates.length,0);
 });

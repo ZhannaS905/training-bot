@@ -5,8 +5,6 @@
 const { isDeepStrictEqual } = require('node:util');
 const TEST_BOT_ID = 131384398;
 const CLIENT_ID = 'demo-client-1';
-const EXPECTED_CHAT_ID = 126619382;
-const EXPECTED_USER_ID = 5819064;
 
 const OWNER_UID = 'lLlMAetSG1aEeJSeBl4F4ypydEh2';
 // Legacy documents omit the attendance counter; rules and Pilot treat that as zero.
@@ -54,14 +52,17 @@ function findSubscription(state, clientId, subscriptionId) {
 }
 
 function validBinding(binding, clientId) {
-  if (binding?.version !== 1 || binding?.botId !== TEST_BOT_ID ||
-      !Array.isArray(binding.bindings) || binding.bindings.length !== 1) return false;
-  const row = binding.bindings[0];
-  return row?.clientId === clientId && row.notificationsEnabled === true &&
-    row.maxChatId === EXPECTED_CHAT_ID && row.maxUserId === EXPECTED_USER_ID;
+  if (binding?.version !== 1 || binding?.botId !== TEST_BOT_ID || !Array.isArray(binding.bindings)) return false;
+  const rows = binding.bindings;
+  if (rows.some(row => !map(row) || typeof row.clientId !== 'string' || !row.clientId ||
+      !Number.isSafeInteger(row.maxChatId) || row.maxChatId <= 0 ||
+      !Number.isSafeInteger(row.maxUserId) || row.maxUserId <= 0 || typeof row.notificationsEnabled !== 'boolean')) return false;
+  for (const key of ['clientId','maxChatId','maxUserId'])
+    if (new Set(rows.map(row => row[key])).size !== rows.length) return false;
+  return rows.some(row => row.clientId === clientId && row.notificationsEnabled === true);
 }
 
-function previewDeductions(before, after, binding, diagnostics) {
+function previewForClient(before, after, binding, diagnostics, CLIENT_ID) {
   const reject = reason => { if (diagnostics) diagnostics.reasons[reason] = (diagnostics.reasons[reason] || 0) + 1; };
   // First read is only a baseline; no historical operation may trigger a preview.
   if (!before || !after) { reject('BASELINE_ONLY'); return []; }
@@ -85,7 +86,7 @@ function previewDeductions(before, after, binding, diagnostics) {
     if (!clients || typeof clients !== 'object' || Array.isArray(clients)) continue;
     const op = clients[CLIENT_ID];
     if (!op) continue;
-    if (op.status !== 'attended' || after.visits?.[workoutId]?.[CLIENT_ID] !== 'attended') { reject('NOT_ATTENDED'); continue; }
+    if (!['attended','missed'].includes(op.status) || after.visits?.[workoutId]?.[CLIENT_ID] !== op.status) { reject('NOT_ATTENDED'); continue; }
     if (typeof op.operationId !== 'string' || !/^[a-zA-Z0-9-]{8,128}$/.test(op.operationId) ||
         typeof op.subscriptionId !== 'string' || !op.subscriptionId) { reject('OPERATION_FIELDS_INVALID'); continue; }
     // An existing operation is not new, including after restart or unrelated edits.
@@ -123,7 +124,8 @@ function previewDeductions(before, after, binding, diagnostics) {
     if (!isDeepStrictEqual(withoutTarget(before),withoutTarget(after))) { reject('OTHER_CLIENT_VISITS_CHANGED'); continue; }
     candidates.push({ operationId: op.operationId, workoutId, clientId: CLIENT_ID,
       subscriptionId: op.subscriptionId, remaining: newSub.left, previous: oldSub.left,
-      maxChatId: binding?.bindings?.[0]?.maxChatId });
+      status: op.status, date: workout.date,
+      maxChatId: binding.bindings.find(row => row.clientId === CLIENT_ID).maxChatId });
   }
   // One operation per subscription per observed transition. Ambiguous batches
   // are deliberately not previewed until a separate ordering design exists.
@@ -137,9 +139,15 @@ function previewDeductions(before, after, binding, diagnostics) {
   return bindingOK && revisionOK ? eligible : [];
 }
 
+function previewDeductions(before, after, binding, diagnostics) {
+  if (diagnostics && !(binding?.bindings || []).some(row => validBinding(binding,row.clientId))) diagnostics.reasons.BINDING_NOT_APPROVED = 1;
+  return (binding?.bindings || []).filter(row => validBinding(binding,row.clientId))
+    .flatMap(row => previewForClient(before,after,binding,diagnostics,row.clientId));
+}
+
 function createPreviewSession({ diagnose = false } = {}) {
   let previous = null;
-  const seen = new Set();
+  const seen = new Set(), seenVisits = new Set();
   return { check(state,binding) {
     validateState(state);
     if (!map(binding) || binding.version !== 1 || binding.botId !== TEST_BOT_ID ||
@@ -162,11 +170,13 @@ function createPreviewSession({ diagnose = false } = {}) {
       reasons: {}
     } : undefined;
     const candidates = previewDeductions(previous,state,binding,diagnostics).filter(item => {
-      if (!seen.has(item.operationId)) return true;
+      if (!seen.has(item.operationId) && !seenVisits.has(JSON.stringify([item.workoutId,item.clientId]))) return true;
       if (diagnostics) diagnostics.reasons.OPERATION_SEEN_IN_SESSION = (diagnostics.reasons.OPERATION_SEEN_IN_SESSION || 0) + 1;
       return false;
     });
     if (diagnostics && !baseline && diagnostics.afterPilotVisitOps === 0) diagnostics.reasons.NO_PILOT_VISIT_OPS = 1;
+    for (const [wid, entries] of Object.entries(state.visits))
+      for (const cid of Object.keys(entries)) seenVisits.add(JSON.stringify([wid,cid]));
     for (const id of operationIds(state)) seen.add(id);
     previous = structuredClone(state);
     return {baseline,candidates,...(diagnostics ? {diagnostics} : {})};

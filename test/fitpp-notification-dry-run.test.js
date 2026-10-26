@@ -37,7 +37,8 @@ test('reverted or unpaid marks do not produce a deduction preview', () => {
   assert.deepEqual(previewDeductions(state(5, mark('old-operation'), visits()), state(6), binding), []);
   assert.deepEqual(previewDeductions(state(6), state(6, mark('new-operation'), visits()), binding), []);
   assert.deepEqual(previewDeductions(state(6), state(5, mark('new-operation', 'razov'), visits('razov')), binding), []);
-  assert.deepEqual(previewDeductions(state(6), state(5, mark('new-operation', 'missed'), visits('missed')), binding), []);
+  assert.equal(previewDeductions(state(6), state(5, mark('new-operation', 'missed'), visits('missed')), binding)[0].status, 'missed');
+  assert.deepEqual(previewDeductions(state(6), state(5, mark('new-operation', 'excused'), visits('excused')), binding), []);
 });
 test('no preview without explicit enabled test-client binding', () => {
   assert.deepEqual(previewDeductions(state(6), state(5, mark('new-operation'), visits()),
@@ -62,14 +63,14 @@ test('preview configuration refuses any non-test project', () => {
   assert.throws(() => config({ FIREBASE_PROJECT_ID: 'fitpp-165a2' }), /PROJECT_REFUSED/);
 });
 
-test('recipient must match exact approved Training Test pilot identity', () => {
+test('invalid personal binding cannot produce a candidate', () => {
   const before = state(6);
   const after = state(5, mark('new-operation'), visits());
   assert.deepEqual(previewDeductions(before, after, { ...binding, bindings: [{
-    ...binding.bindings[0], maxUserId: 999
+    ...binding.bindings[0], maxUserId: 0
   }] }), []);
   assert.deepEqual(previewDeductions(before, after, { ...binding, bindings: [{
-    ...binding.bindings[0], maxChatId: 999
+    ...binding.bindings[0], maxChatId: -999
   }] }), []);
 });
 test('moving a historical operation to another workout never previews as new', () => {
@@ -115,7 +116,7 @@ test('unknown workout, duplicate IDs, money charge, changed terms and skipped re
     s=>{s.clients[0].archivedAt='2026-10-24';}
   ]) {const candidate=structuredClone(after);mutate(candidate);assert.deepEqual(previewDeductions(before,candidate,binding),[]);}
 });
-test('real bundled FitPP reducer: deduction, undo and new attendance', () => {
+test('real bundled FitPP reducer: deduction, undo and replacement stays silent', () => {
   const store=require('../direct-core/FitPP-Test/persistence.js');
   const before=structuredClone(require('../direct-core/fixtures/main.json'));
   const action={type:'attendance',workoutId:WORKOUT,clientId:CLIENT,status:'attended',date:'2026-10-24',location:'online'};
@@ -126,7 +127,7 @@ test('real bundled FitPP reducer: deduction, undo and new attendance', () => {
   const undone=store.reduce(after,action,'2026-10-24');undone.attendanceRevision=after.attendanceRevision+1;
   assert.equal(session.check(undone,binding).candidates.length,0);
   const repeated=store.reduce(undone,action,'2026-10-24');repeated.attendanceRevision=undone.attendanceRevision+1;
-  assert.equal(session.check(repeated,binding).candidates.length,1);
+  assert.equal(session.check(repeated,binding).candidates.length,0);
 });
 
 const cli=require('../fitpp-notification-preview.cjs');
@@ -381,7 +382,7 @@ test('malformed attendance revisions refuse baseline, legacy absent counter mean
   assert.equal(session.check(before,binding).diagnostics.afterAttendanceRevision,0);
   assert.equal(session.check(after,binding).candidates.length,1);
 });
-test('revision gaps are skipped without catch-up, next sequential new operation can preview',()=>{
+test('revision gaps and later replacement of the same visit stay silent',()=>{
   const session=createPreviewSession({diagnose:true}),before=state(6);
   session.check(before,binding);
   const skipped=state(5,mark('skipped-operation'),visits());skipped.attendanceRevision=before.attendanceRevision+2;
@@ -397,7 +398,7 @@ test('revision gaps are skipped without catch-up, next sequential new operation 
   assert.equal(repeated.diagnostics.reasons.OPERATION_SEEN_IN_SESSION,1);
   cancelled.attendanceRevision=replay.attendanceRevision+1;session.check(cancelled,binding);
   const fresh=state(5,mark('fresh-operation'),visits());fresh.attendanceRevision=cancelled.attendanceRevision+1;
-  assert.equal(session.check(fresh,binding).candidates.length,1);
+  assert.equal(session.check(fresh,binding).candidates.length,0);
   assert.deepEqual(createPreviewSession().check(fresh,binding).candidates,[]); // Restart is baseline only.
 });
 test('no-op attendance revision and unchanged balance never preview',()=>{
@@ -405,4 +406,10 @@ test('no-op attendance revision and unchanged balance never preview',()=>{
   assert.deepEqual(previewDeductions(before,after,binding),[]);
   after.visitOps=mark('noop-operation');after.visits=visits();
   assert.deepEqual(previewDeductions(before,after,binding),[]);
+});
+test('detector supports missed deduction for another explicitly connected client',()=>{
+ const remap=s=>{s.clients[0].id='connected-2';for(const key of ['visits','visitOps','attendanceOps'])for(const entries of Object.values(s[key]))if(entries[CLIENT]!==undefined){entries['connected-2']=entries[CLIENT];delete entries[CLIENT];}return s;};
+ const b={...binding,bindings:[...binding.bindings,{clientId:'connected-2',maxChatId:98765,maxUserId:12345,notificationsEnabled:true}]};
+ const items=previewDeductions(remap(state(6)),remap(state(5,mark('connected-operation','missed'),visits('missed'))),b);
+ assert.equal(items.length,1);assert.equal(items[0].clientId,'connected-2');assert.equal(items[0].status,'missed');assert.equal(items[0].date,'2026-10-24');assert.equal(items[0].maxChatId,98765);
 });

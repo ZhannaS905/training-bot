@@ -1,12 +1,12 @@
 'use strict';
-// Dedicated synthetic-client capability. Does not change the general bot write flags.
+// Dedicated test-workspace capability. Does not change the general bot write flags.
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash} = require('node:crypto');
 const {MaxApi} = require('./api');
 const {checkTestBotIdentity, identityAccepted} = require('./test-bot-identity');
 const {validBinding} = require('./fitpp-notification-dry-run.cjs');
-const BOT = '131384398', CHAT = 126619382, USER = 5819064;
+const BOT = '131384398';
 function settings(env) {
   const token = env.TEST_BOT_TOKEN || env.BOT_TOKEN;
   if (env.BOT_MODE !== 'test' || env.FIREBASE_PROJECT_ID !== 'fitpp-test' ||
@@ -17,9 +17,15 @@ function settings(env) {
     throw Error('NOTIFICATION_SCOPE_REFUSED');
   return token;
 }
-async function verify(raw, binding) {
-  if (!validBinding(binding,'demo-client-1')) throw Error('NOTIFICATION_BINDING_REFUSED');
+async function verify(raw, binding, clientId) {
+  if (clientId === undefined) {
+    if (!Array.isArray(binding?.bindings)) throw Error('NOTIFICATION_BINDING_REFUSED');
+    for (const row of binding.bindings.filter(row => row.notificationsEnabled)) await verify(raw,binding,row.clientId);
+    return;
+  }
+  if (!validBinding(binding,clientId)) throw Error('NOTIFICATION_BINDING_REFUSED');
   if (!identityAccepted(checkTestBotIdentity(await raw.request('GET','/me'),BOT))) throw Error('NOTIFICATION_IDENTITY_REFUSED');
+  const {maxChatId: CHAT, maxUserId: USER} = binding.bindings.find(row => row.clientId === clientId);
   const chat = await raw.request('GET','/chats/' + CHAT);
   if (chat.chat_id !== CHAT || chat.type !== 'dialog' || chat.status !== 'active' ||
       chat.dialog_with_user?.user_id !== USER || chat.dialog_with_user?.is_bot !== false)
@@ -35,27 +41,33 @@ function reserve(directory, operationId) {
   const dir = fs.openSync(directory,'r');try {fs.fsyncSync(dir)} finally {fs.closeSync(dir)}
   return true;
 }
-function createSender({env, directory, raw, limit = 3}) {
+function formatNotification(item) {
+  const title = item.status === 'attended' ? '✅ Тренировка состоялась!' : '🔥 Занятие сгорело';
+  const farewell = item.status === 'attended' ? '🫶 До встречи на следующей тренировке!' : '🫶 Ждём на следующей тренировке!';
+  const warning = item.remaining === 1 ? '\n\n⚠️ Осталось последнее занятие!' : item.remaining === 0 ? '\n\n⚠️ Занятия по абонементу закончились.' : '';
+  return `${title}\n\n📅 ${item.date.split('-').reverse().join('.')}\nС абонемента списано 1 занятие.\n\nОсталось занятий: ${item.remaining}${warning}\n\n${farewell}`;
+}
+function createSender({env, directory, raw}) {
   const token = settings(env);
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 3) throw Error('NOTIFICATION_LIMIT_REFUSED');
   raw ||= new MaxApi(token);
-  let attempts = 0, tail = Promise.resolve();
+  let tail = Promise.resolve();
   return {verify: binding => verify(raw,binding), send(item,binding) {
     const job = tail.then(async () => {
-      if (item?.clientId !== 'demo-client-1' || item.maxChatId !== CHAT ||
+      if (!validBinding(binding,item?.clientId) || item.maxChatId !== binding.bindings.find(row => row.clientId === item.clientId).maxChatId ||
+          !['attended','missed'].includes(item.status) || !/^\d{4}-\d{2}-\d{2}$/.test(item.date || '') ||
+          typeof item.workoutId !== 'string' || !item.workoutId ||
           !/^[a-zA-Z0-9-]{8,128}$/.test(item.operationId || '') ||
           !Number.isSafeInteger(item.remaining) || item.remaining < 0 || item.previous !== item.remaining + 1)
         throw Error('NOTIFICATION_CANDIDATE_REFUSED');
-      if (attempts >= limit) return 'limit';
-      await verify(raw,binding);
+      await verify(raw,binding,item.clientId);
       if (!reserve(directory,item.operationId)) return 'duplicate';
-      attempts++;
+      if (!reserve(directory,'visit:' + JSON.stringify([item.clientId,item.workoutId]))) return 'duplicate';
       try {
-        await raw.send(String(CHAT),{text:'ТЕСТ FitPP: списано 1 занятие. Остаток: ' + item.remaining + ' зан.',notify:false});
+        await raw.send(String(item.maxChatId),{text:formatNotification(item),notify:false});
         return 'sent';
       } catch {return 'uncertain'}
     });
     tail = job.catch(()=>{});return job;
   }};
 }
-module.exports = {settings,verify,reserve,createSender};
+module.exports = {settings,verify,reserve,createSender,formatNotification};

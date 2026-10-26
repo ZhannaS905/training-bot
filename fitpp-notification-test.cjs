@@ -6,7 +6,7 @@ const {createPreviewSession} = require('./src/fitpp-notification-dry-run.cjs');
 const {createSender,settings} = require('./src/fitpp-notification-send.cjs');
 async function main(env=process.env,args=process.argv.slice(2),{
   wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
-  storageRoot='/app/data'
+  storageRoot=env.FITPP_NOTIFICATION_STORAGE_ROOT || '/app/data'
 }={}) {
   const mode=args.join(' ');
   if (!['--verify','--watch','--send --watch'].includes(mode)) throw Error('ARGUMENT_REFUSED');
@@ -14,6 +14,9 @@ async function main(env=process.env,args=process.argv.slice(2),{
   const live=mode==='--send --watch';
   const directory=require('node:path').join(storageRoot,'fitpp-notification-attempts-v1');
   if(live){
+    if(env.FITPP_NOTIFICATION_STORAGE_CONFIRMED !== 'fitpp-test:synthetic-v1:training-test:v1' ||
+       fs.readFileSync(require('node:path').join(storageRoot,'.fitpp-notification-volume'),'utf8').trim() !== env.FITPP_NOTIFICATION_STORAGE_CONFIRMED)
+      throw Error('DURABLE_STORAGE_REQUIRED');
     if(!fs.statSync(storageRoot).isDirectory())throw Error('DURABLE_STORAGE_REQUIRED');
     fs.mkdirSync(directory,{recursive:true,mode:0o700});
   }

@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {main}=require('../fitpp-notification-test.cjs');
 const preview=require('../fitpp-notification-preview.cjs');
-const env={BOT_MODE:'test',FIREBASE_PROJECT_ID:'fitpp-test',TEST_EXPECTED_BOT_ID:'131384398',TEST_BOT_TOKEN:'mock',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',FIREBASE_API_KEY:'fake-key',FIREBASE_BOT_EMAIL:'fake@example.invalid',FIREBASE_BOT_PASSWORD:'fake-password',CHAT_IDS:'-80345864298680'};
+const env={BOT_MODE:'test',FIREBASE_PROJECT_ID:'fitpp-test',TEST_EXPECTED_BOT_ID:'131384398',TEST_BOT_TOKEN:'mock',AUTO_PUBLISH:'false',TEST_ALLOW_SEND:'false',TEST_ALLOW_EDIT:'false',TEST_ALLOW_DELETE:'false',FIREBASE_API_KEY:'fake-key',FIREBASE_BOT_EMAIL:'fake@example.invalid',FIREBASE_BOT_PASSWORD:'fake-password',FITPP_NOTIFICATION_STORAGE_CONFIRMED:'fitpp-test:synthetic-v1:training-test:v1',CHAT_IDS:'-80345864298680'};
 const uid='lLlMAetSG1aEeJSeBl4F4ypydEh2';
 const binding={version:1,botId:131384398,bindings:[{clientId:'demo-client-1',maxChatId:126619382,maxUserId:5819064,notificationsEnabled:true}]};
 function snapshots(){
@@ -19,6 +19,7 @@ function wire(v){
 }
 function fixture(t,{wrongUser=false}={}){
   const storageRoot=fs.mkdtempSync(path.join(os.tmpdir(),'fitpp-entrypoint-'));
+  fs.writeFileSync(path.join(storageRoot,'.fitpp-notification-volume'),env.FITPP_NOTIFICATION_STORAGE_CONFIRMED);
   const calls=[],logs=[],states=snapshots();let reads=0,waits=0;
   t.after(()=>fs.rmSync(storageRoot,{recursive:true,force:true}));
   t.mock.method(console,'log',line=>logs.push(line));
@@ -51,20 +52,20 @@ test('standalone dry-run: Auth -> fixed Firestore snapshots -> identity -> candi
   const f=fixture(t);await assert.rejects(main(env,['--watch'],f),e=>e===f.stop);
   assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT dry-run'));
   assert.equal(f.calls.filter(c=>c.url.hostname==='platform-api2.max.ru'&&c.options.method!=='GET').length,0);
-  assert.deepEqual(fs.readdirSync(f.storageRoot),[]);
+  assert.deepEqual(fs.readdirSync(f.storageRoot),['.fitpp-notification-volume']);
 });
 test('standalone send mode with intercepted fetch: baseline silent, one personal POST, repeat silent, durable claim',async t=>{
   const f=fixture(t);await assert.rejects(main(env,['--send','--watch'],f),e=>e===f.stop);
   const posts=f.calls.filter(c=>c.url.hostname==='platform-api2.max.ru'&&c.options.method==='POST');
-  assert.equal(posts.length,1);assert.deepEqual(JSON.parse(posts[0].options.body),{text:'ТЕСТ FitPP: списано 1 занятие. Остаток: 5 зан.',notify:false});
+  assert.equal(posts.length,1);assert.deepEqual(JSON.parse(posts[0].options.body),{text:require('../src/fitpp-notification-send.cjs').formatNotification({...snapshots()[1],status:'attended',date:'2026-10-26',remaining:5}),notify:false});
   assert.equal(f.logs[0],'FITPP_NOTIFICATION_BASELINE no_history_send');
   assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT sent'));
-  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,1);
+  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,2);
 });
 test('standalone verify exits without sending or creating storage',async t=>{
   const f=fixture(t);await main(env,['--verify'],f);
   assert.deepEqual(f.logs,['FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write']);
-  assert.equal(f.calls.length,5);assert.deepEqual(fs.readdirSync(f.storageRoot),[]);
+  assert.equal(f.calls.length,5);assert.deepEqual(fs.readdirSync(f.storageRoot),['.fitpp-notification-volume']);
 });
 test('standalone refuses wrong live recipient before any message or reservation',async t=>{
   const f=fixture(t,{wrongUser:true});await assert.rejects(main(env,['--send','--watch'],f),/NOTIFICATION_RECIPIENT_REFUSED/);
@@ -80,7 +81,7 @@ test('existing preview watcher delegates explicit send mode through prepared int
   assert.equal(posts.length,1);assert.equal(posts[0].url.search,'?chat_id=126619382');
   assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT sent'));
   assert.ok(!f.logs.some(line=>line.startsWith('FITPP_PREVIEW_ONLY')));
-  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,1);
+  assert.equal(fs.readdirSync(path.join(f.storageRoot,'fitpp-notification-attempts-v1')).length,2);
 });
 test('existing watcher send mode refuses production, wrong recipient and ambiguous flags',async t=>{
   const f=fixture(t,{wrongUser:true});
@@ -96,7 +97,8 @@ test('actual preview CLI loads shared helpers before delegation and hides transp
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const hook=path.join(dir,'offline.cjs');
   fs.writeFileSync(hook,`const fs=require('node:fs');
-const stat=fs.statSync,mkdir=fs.mkdirSync;
+const stat=fs.statSync,mkdir=fs.mkdirSync,read=fs.readFileSync;
+fs.readFileSync=function(p,...args){if(p==='/app/data/.fitpp-notification-volume')return 'fitpp-test:synthetic-v1:training-test:v1';return read.call(this,p,...args)};
 fs.statSync=function(p,...args){return p==='/app/data'?{isDirectory:()=>true}:stat.call(this,p,...args)};
 fs.mkdirSync=function(p,...args){if(p==='/app/data/fitpp-notification-attempts-v1')return;return mkdir.call(this,p,...args)};
 global.fetch=async()=>{console.log('TEST_AUTH_INTERCEPTED');throw Error('private-transport-detail')};
@@ -105,4 +107,10 @@ global.fetch=async()=>{console.log('TEST_AUTH_INTERCEPTED');throw Error('private
   assert.equal(result.status,1);assert.equal(result.stdout.trim(),'TEST_AUTH_INTERCEPTED');
   assert.equal(result.stderr.trim(),'FITPP_NOTIFICATION_FAILED CHECK_FAILED');
   assert.ok(!result.stderr.includes('private-transport-detail'));
+});
+test('live mode requires operator-confirmed persistent volume before network',async t=>{
+ const f=fixture(t);fs.unlinkSync(path.join(f.storageRoot,'.fitpp-notification-volume'));
+ await assert.rejects(main(env,['--send','--watch'],f));assert.equal(f.calls.length,0);
+ fs.writeFileSync(path.join(f.storageRoot,'.fitpp-notification-volume'),env.FITPP_NOTIFICATION_STORAGE_CONFIRMED);
+ await assert.rejects(main({...env,FITPP_NOTIFICATION_STORAGE_CONFIRMED:''},['--send','--watch'],f),/DURABLE_STORAGE_REQUIRED/);assert.equal(f.calls.length,0);
 });

@@ -69,7 +69,7 @@ async function readBoth(token) {
 }
 async function main(env = process.env, args = process.argv.slice(2), {
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  storageRoot = '/app/data'
+  storageRoot = env.FITPP_NOTIFICATION_STORAGE_ROOT || '/app/data'
 } = {}) {
   if (args.includes('--send')) {
     if (args.length !== 2 || args[0] !== '--send' || args[1] !== '--watch') throw Error('ARGUMENT_REFUSED');

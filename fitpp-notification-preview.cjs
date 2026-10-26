@@ -66,8 +66,16 @@ async function readBoth(token) {
   const binding = await readDocument(token, BINDING);
   return { main, binding };
 }
-async function main(env = process.env, args = process.argv.slice(2)) {
-  if (args.length > 1 || (args.length === 1 && args[0] !== '--watch')) throw Error('ARGUMENT_REFUSED');
+async function main(env = process.env, args = process.argv.slice(2), {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
+  let checks = 1;
+  const watch = args.length === 1 && args[0] === '--watch';
+  if (watch) checks = Infinity;
+  else if (args.length === 2 && args[0] === '--checks' && /^[1-9][0-9]*$/.test(args[1])) {
+    checks = Number(args[1]);
+    if (!Number.isSafeInteger(checks)) throw Error('ARGUMENT_REFUSED');
+  } else if (args.length !== 0) throw Error('ARGUMENT_REFUSED');
   config(env);
   let token = await signIn(env);
   let expires = Date.now() + 45 * 60 * 1000;
@@ -88,11 +96,11 @@ async function main(env = process.env, args = process.argv.slice(2)) {
     // Session retains historical IDs even after cancellation; baseline stays in memory only.
   };
   await check();
-  if (args.length === 0) return;
-  console.log('FITPP_DRY_RUN_WATCH_ACTIVE no_max_send no_firestore_write');
+  if (checks === 1) return;
+  if (watch) console.log('FITPP_DRY_RUN_WATCH_ACTIVE no_max_send no_firestore_write');
   // Serialized checks, no overlap, no external side effects.
-  while (true) {
-    await new Promise(resolve => setTimeout(resolve, 30000));
+  for (let completed = 1; completed < checks; completed++) {
+    await wait(30000);
     await check();
   }
 }

@@ -192,3 +192,103 @@ test('CLI error output never includes credentials or transport error details',()
     assert.equal(result.stderr.trim(),'FITPP_DRY_RUN_FAILED CHECK_FAILED');
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+async function captureLogs(run) {
+  const original=console.log,lines=[];
+  console.log=line=>lines.push(line);
+  try {await run(lines);} finally {console.log=original;}
+}
+function snapshotResponse(snapshots, failAt = -1) {
+  let reads=0;
+  return (url,options,n)=>{
+    if(n===1)return ok({localId:'lLlMAetSG1aEeJSeBl4F4ypydEh2',idToken:token()});
+    if(n===failAt)return {ok:false,status:403};
+    assert.equal(options.method,'GET');
+    assert.match(url,/^https:\/\/firestore.googleapis.com\/v1\/projects\/fitpp-test\//);
+    const value=reads++%2===0?snapshots[Math.floor((reads-1)/2)]:binding;
+    return ok({name:url.split('/v1/')[1],fields:wire(value).mapValue.fields});
+  };
+}
+test('--checks 4 reads baseline plus three snapshots with exactly three 30-second waits',async()=>{
+  const after=state(5,mark('bounded-operation'),visits());
+  await captureLogs(async lines=>mocked(async calls=>{
+    const waits=[];
+    await cli.main(env,['--checks','4'],{wait:async ms=>{waits.push(ms);assert.equal(calls.length,1+waits.length*2);}});
+    assert.deepEqual(waits,[30000,30000,30000]);
+    assert.equal(calls.length,9); // one Auth POST, eight Firestore GETs
+    assert.deepEqual(lines,[
+      'FITPP_DRY_RUN_BASELINE_OK','FITPP_DRY_RUN_CHECK_OK previews=1',
+      'FITPP_PREVIEW_ONLY remaining=5','FITPP_DRY_RUN_CHECK_OK previews=0',
+      'FITPP_DRY_RUN_CHECK_OK previews=0'
+    ]);
+  },snapshotResponse([state(6),after,after,after])));
+});
+test('--checks 1 performs only baseline without waiting',async()=>{
+  await captureLogs(async lines=>mocked(async calls=>{
+    await cli.main(env,['--checks','1'],{wait:()=>assert.fail('unexpected wait')});
+    assert.equal(calls.length,3);assert.deepEqual(lines,['FITPP_DRY_RUN_BASELINE_OK']);
+  },snapshotResponse([state(6)])));
+});
+test('--checks rejects invalid, missing, conflicting and excessive arguments before network',async()=>{
+  await mocked(async calls=>{
+    for(const args of [['--checks'],['--checks','0'],['--checks','-1'],['--checks','1.5'],
+      ['--checks','NaN'],['--checks','Infinity'],['--checks','9007199254740992'],
+      ['--checks','4','--watch'],['--watch','--checks','4'],['--checks','4','extra']])
+      await assert.rejects(()=>cli.main(env,args),/ARGUMENT_REFUSED/);
+    assert.equal(calls.length,0);
+  },()=>assert.fail('network reached'));
+});
+test('--checks stops immediately on a later Firestore error',async()=>{
+  await captureLogs(async lines=>mocked(async calls=>{
+    const waits=[];
+    await assert.rejects(()=>cli.main(env,['--checks','4'],{wait:async ms=>waits.push(ms)}),/HTTP_403/);
+    assert.equal(calls.length,4);assert.deepEqual(waits,[30000]);
+    assert.deepEqual(lines,['FITPP_DRY_RUN_BASELINE_OK']);
+  },snapshotResponse([state(6)],4)));
+});
+test('--watch remains unbounded with unchanged active diagnostic and sequential 30-second waits',async()=>{
+  await captureLogs(async lines=>mocked(async calls=>{
+    let waits=0;
+    await assert.rejects(()=>cli.main(env,['--watch'],{wait:async ms=>{
+      assert.equal(ms,30000);if(++waits===5)throw Error('TEST_STOP');
+    }}),/TEST_STOP/);
+    assert.equal(calls.length,11); // baseline and four additional checks
+    assert.equal(lines[0],'FITPP_DRY_RUN_BASELINE_OK');
+    assert.equal(lines[1],'FITPP_DRY_RUN_WATCH_ACTIVE no_max_send no_firestore_write');
+    assert.deepEqual(lines.slice(2),Array(4).fill('FITPP_DRY_RUN_CHECK_OK previews=0'));
+  },snapshotResponse(Array(5).fill(state(6)))));
+});
+test('--checks 4 actual CLI exits 0; later HTTP or network error exits 1 with safe output',()=>{
+  const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{spawnSync}=require('node:child_process');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fitpp-bounded-test-'));
+  try {
+    for(const failure of ['none','http','network']) {
+      const hook=path.join(dir,'fetch.cjs');
+      const auth={localId:'lLlMAetSG1aEeJSeBl4F4ypydEh2',idToken:token()};
+      const fields=wire(state(6)).mapValue.fields,bindingFields=wire(binding).mapValue.fields;
+      fs.writeFileSync(hook,`
+        const original=setTimeout;
+        global.setTimeout=(fn,ms,...args)=>original(fn,ms===30000?0:ms,...args);
+        let calls=0;
+        global.fetch=async(url,options)=>{
+          calls++;
+          if(calls===1)return {ok:true,json:async()=>(${JSON.stringify(auth)})};
+          if(calls===4&&${JSON.stringify(failure)}==='network')throw Error('fake-secret private-name');
+          if(calls===4&&${JSON.stringify(failure)}==='http')return {ok:false,status:403};
+          if(options.method!=='GET'||!url.startsWith('https://firestore.googleapis.com/v1/projects/fitpp-test/'))throw Error('unsafe request');
+          return {ok:true,json:async()=>({name:url.split('/v1/')[1],fields:calls%2===0?${JSON.stringify(fields)}:${JSON.stringify(bindingFields)}})};
+        };`);
+      const result=spawnSync(process.execPath,['--require',hook,path.resolve(__dirname,'../fitpp-notification-preview.cjs'),'--checks','4'],
+        {env:{...env},encoding:'utf8',timeout:5000});
+      assert.equal(result.error,undefined);
+      assert.equal(result.status,failure==='none'?0:1);
+      if(failure==='none') {
+        assert.equal(result.stderr,'');
+        assert.deepEqual(result.stdout.trim().split('\n'),['FITPP_DRY_RUN_BASELINE_OK',...Array(3).fill('FITPP_DRY_RUN_CHECK_OK previews=0')]);
+      } else {
+        assert.equal(result.stdout.trim(),'FITPP_DRY_RUN_BASELINE_OK');
+        assert.equal(result.stderr.trim(),'FITPP_DRY_RUN_FAILED '+(failure==='http'?'HTTP_403':'CHECK_FAILED'));
+      }
+    }
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});

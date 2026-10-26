@@ -59,3 +59,22 @@ test('Firestore REST values decode without leaking unrelated fields', () => {
 test('preview configuration refuses any non-test project', () => {
   assert.throws(() => config({ FIREBASE_PROJECT_ID: 'fitpp-165a2' }), /PROJECT_REFUSED/);
 });
+
+test('recipient must match exact approved Training Test pilot identity', () => {
+  const before = state(6);
+  const after = state(5, mark('new-operation'), visits());
+  assert.deepEqual(previewDeductions(before, after, { ...binding, bindings: [{
+    ...binding.bindings[0], maxUserId: 999
+  }] }), []);
+  assert.deepEqual(previewDeductions(before, after, { ...binding, bindings: [{
+    ...binding.bindings[0], maxChatId: 999
+  }] }), []);
+});
+test('moving a historical operation to another workout never previews as new', () => {
+  const oldWorkout = 'online_2026-10-24';
+  const before = state(6, { [oldWorkout]: { [CLIENT]: {
+    operationId: 'reused-operation', subscriptionId: SUB, status: 'attended'
+  } } }, { [oldWorkout]: { [CLIENT]: 'attended' } });
+  const after = state(5, mark('reused-operation'), visits());
+  assert.deepEqual(previewDeductions(before, after, binding), []);
+});

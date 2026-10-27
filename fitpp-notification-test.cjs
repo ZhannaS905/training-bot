@@ -10,6 +10,16 @@ async function main(env=process.env,args=process.argv.slice(2),{
   storageRoot=env.FITPP_NOTIFICATION_STORAGE_ROOT || '/app/data'
 }={}) {
   const mode=args.join(' ');
+  if(mode==='--diagnose-receipts'){
+    // Standalone read-only path: never constructs/verifies a MAX sender, calls
+    // session.check(), or initializes durable storage/seen.
+    config(env);
+    const token=await signIn(env),first=await readBoth(token),fresh=await readBoth(token);
+    const receipts=require('./src/fitpp-receipt-notifications.cjs');
+    const directory=require('node:path').join(storageRoot,'fitpp-notification-attempts-v1');
+    for(const line of receipts.diagnosticLines(receipts.diagnoseReceipts(first.main,first.binding,{directory,freshState:fresh.main,freshBinding:fresh.binding})))console.log(line);
+    return;
+  }
   if (!['--verify','--watch','--send --watch'].includes(mode)) throw Error('ARGUMENT_REFUSED');
   config(env);settings(env);
   const live=mode==='--send --watch';
@@ -36,6 +46,7 @@ async function main(env=process.env,args=process.argv.slice(2),{
   const expirySender=require('./src/fitpp-notification-send.cjs').createExpirySender({env,directory});
   const receipts=require('./src/fitpp-receipt-notifications.cjs');
   const receiptSession=receipts.createReceiptSession(live&&env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?{directory}:{}), receiptSender=receipts.createReceiptSender({env,directory});
+  let lastReceiptDiagnostics;
   let token=await signIn(env),expires=Date.now()+45*60000;
   do {
     if(Date.now()>=expires){token=await signIn(env);expires=Date.now()+45*60000}
@@ -43,8 +54,14 @@ async function main(env=process.env,args=process.argv.slice(2),{
     await sender.verify(binding);
     if(mode==='--verify'){console.log('FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write');return}
     const {baseline,candidates}=session.check(state,binding);
+    // Diagnostics also examine historic/seen receipts. Failure of this observer
+    // must never change the existing send/check path or reset session state.
+    let diagnosticRows;
+    try{diagnosticRows=receipts.diagnosticLines(receiptSession.diagnose(state,binding,{directory}));}
+    catch{diagnosticRows=['FITPP_RECEIPT_DIAG unknown observer UNKNOWN diagnostic_read_failed'];}
     for(const item of (env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?receiptSession.check(state,binding):[])){
       const fresh=await readBoth(token);
+      for(const line of receipts.diagnosticLines(receiptSession.diagnose(state,binding,{directory,ids:[item.requestId],freshState:fresh.main,freshBinding:fresh.binding,candidates:[item]})))console.log(line);
       if(receipts.current(item,fresh.main,fresh.binding)){
         if(!live)console.log('FITPP_RECEIPT_PREVIEW '+JSON.stringify(receipts.format(item)));
         console.log('FITPP_RECEIPT_RESULT '+(live?await receiptSender.send(item,fresh.main,fresh.binding):'dry-run'));
@@ -63,6 +80,8 @@ async function main(env=process.env,args=process.argv.slice(2),{
       lastEmptyCandidatesLog=Date.now();
     }
     for(const item of candidates)console.log('FITPP_NOTIFICATION_RESULT '+(live?await sender.send(item,binding):'dry-run'));
+    const receiptDiagnosticFingerprint=JSON.stringify(diagnosticRows);
+    if(receiptDiagnosticFingerprint!==lastReceiptDiagnostics){for(const line of diagnosticRows)console.log(line);lastReceiptDiagnostics=receiptDiagnosticFingerprint;}
     await wait(30000);
   } while(true);
 }

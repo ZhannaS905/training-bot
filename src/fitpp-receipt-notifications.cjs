@@ -147,7 +147,9 @@ function diagnoseReceipts(state,binding,{directory,ids=DIAGNOSTIC_IDS,seenIds,se
    const details=new Set(['valid','invalid_receipt','test_client_scope','outside_test_client','event_expiry_valid','event_expiry_invalid','purchase_terms_valid','purchase_terms_invalid','event_duration_valid','event_duration_invalid','freeze_dates_valid','freeze_dates_invalid','active_client','active_client_missing_or_ambiguous','active_subscription','active_subscription_missing_or_ambiguous','valid_binding','invalid_binding','cycle_matches','cycle_mismatch','balance_valid','balance_invalid','subscription_expiry_valid','subscription_expiry_invalid','freeze_history_valid','freeze_history_invalid','expiry_fresh','expiry_before_event']);
    for(const row of diagnoseReceipts(freshState,freshBinding,{directory,ids:[id],candidates:[item]}))if(details.has(row.code))note(row.status,'fresh_'+row.code);
    const freshR=freshState?.mutationReceipts?.[id];
-   check(JSON.stringify(freshR)===item.receipt,'fresh_receipt_unchanged','fresh_receipt_changed');
+   const exact=JSON.stringify(freshR)===item.receipt;
+   check(exact,'fresh_receipt_unchanged','fresh_receipt_changed');
+   if(!exact)try{note('REJECT',require('node:util').isDeepStrictEqual(JSON.parse(item.receipt),freshR)?'fresh_receipt_key_order_changed':'fresh_receipt_content_changed');}catch{note('REJECT','candidate_receipt_invalid');}
   }else note('UNKNOWN','fresh_read_unavailable');
  });return rows;
 }

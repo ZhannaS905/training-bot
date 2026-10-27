@@ -46,7 +46,7 @@ function fixture(t,{wrongUser=false}={}){
   });
   const stop=new Error('END_OF_FIXTURE');
   const wait=async ms=>{assert.equal(ms,30000);if(++waits===3)throw stop;};
-  return {storageRoot,wait,stop,calls,logs};
+  return {storageRoot,wait,stop,calls,logs,states};
 }
 test('standalone dry-run: Auth -> fixed Firestore snapshots -> identity -> candidate, zero MAX writes or disk claims',async t=>{
   const f=fixture(t);await assert.rejects(main(env,['--watch'],f),e=>e===f.stop);
@@ -137,4 +137,35 @@ test('verified Training Test volume accepts existing evidence, preserves journal
  await assert.rejects(main({...liveEnv,FIREBASE_PROJECT_ID:'production'},['--send','--watch'],options));
  assert.equal(f.calls.length,calls);
  assert.ok(f.calls.every(c=>c.url.hostname!=='platform-api2.max.ru'||c.options.method==='GET'));
+});
+
+test('empty candidate logs are hourly per process while every poll and nonzero candidate proceeds immediately',async t=>{
+  const f=fixture(t);
+  // Baseline, empty poll, then a new attendance and repeated unchanged snapshots.
+  f.states.splice(1,0,f.states[0]);
+  const start=Date.now()+7200000;
+  const times=[0,30000,60000,3629999,3630000];
+  let now=start, polls=0;
+  t.mock.method(Date,'now',()=>now);
+  const zeroLogs=()=>f.logs.filter(line=>line==='FITPP_NOTIFICATION_CANDIDATES 0').length;
+  const wait=async ms=>{
+    assert.equal(ms,30000);
+    polls++;
+    if(polls===2)assert.equal(zeroLogs(),1);
+    if(polls===3){
+      assert.ok(f.logs.includes('FITPP_NOTIFICATION_CANDIDATES 1'));
+      assert.ok(f.logs.includes('FITPP_NOTIFICATION_RESULT dry-run'));
+    }
+    if(polls===4)assert.equal(zeroLogs(),1); // one millisecond before the hour
+    if(polls===5){assert.equal(zeroLogs(),2);throw f.stop;} // exactly one hour
+    now=start+times[polls];
+  };
+  await assert.rejects(main(env,['--watch'],{...f,wait}),e=>e===f.stop);
+  assert.equal(f.calls.filter(c=>c.url.pathname.endsWith('/states/main')).length,5);
+  assert.equal(f.calls.filter(c=>c.url.pathname.endsWith('/notificationBindings/training-test')).length,5);
+  // A second main invocation in the same process must retain the throttle.
+  await assert.rejects(main(env,['--watch'],{...f,wait:async ms=>{
+    assert.equal(ms,30000);if(++polls===7)throw f.stop;
+  }}),e=>e===f.stop);
+  assert.equal(zeroLogs(),2);
 });

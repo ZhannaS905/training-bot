@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const {config,signIn,readBoth} = require('./fitpp-notification-preview.cjs');
 const {createPreviewSession} = require('./src/fitpp-notification-dry-run.cjs');
 const {createSender,settings} = require('./src/fitpp-notification-send.cjs');
+let lastEmptyCandidatesLog = -Infinity;
 async function main(env=process.env,args=process.argv.slice(2),{
   wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
   storageRoot=env.FITPP_NOTIFICATION_STORAGE_ROOT || '/app/data'
@@ -37,7 +38,12 @@ async function main(env=process.env,args=process.argv.slice(2),{
     await sender.verify(binding);
     if(mode==='--verify'){console.log('FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write');return}
     const {baseline,candidates}=session.check(state,binding);
-    console.log(baseline?'FITPP_NOTIFICATION_BASELINE no_history_send':'FITPP_NOTIFICATION_CANDIDATES '+candidates.length);
+    if(baseline)console.log('FITPP_NOTIFICATION_BASELINE no_history_send');
+    else if(candidates.length)console.log('FITPP_NOTIFICATION_CANDIDATES '+candidates.length);
+    else if(Date.now()-lastEmptyCandidatesLog>=60*60000){
+      console.log('FITPP_NOTIFICATION_CANDIDATES 0');
+      lastEmptyCandidatesLog=Date.now();
+    }
     for(const item of candidates)console.log('FITPP_NOTIFICATION_RESULT '+(live?await sender.send(item,binding):'dry-run'));
     await wait(30000);
   } while(true);

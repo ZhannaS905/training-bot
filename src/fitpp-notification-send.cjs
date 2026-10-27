@@ -42,7 +42,7 @@ function reserve(directory, operationId) {
   return true;
 }
 function formatNotification(item) {
-  const title = item.status === 'attended' ? '✅ Тренировка состоялась!' : '🔥 Занятие сгорело';
+  const title = item.status === 'attended' ? '✅ Посещение' : '🔥 Занятие сгорело';
   const farewell = item.status === 'attended' ? '🫶 До встречи на следующей тренировке!' : '🫶 Ждём на следующей тренировке!';
   const warning = item.remaining === 1 ? '\n\n⚠️ Осталось последнее занятие!' : item.remaining === 0 ? '\n\n⚠️ Занятия по абонементу закончились.' : '';
   return `${title}\n\n📅 ${item.date.split('-').reverse().join('.')}\nС абонемента списано 1 занятие.\n\nОсталось занятий: ${item.remaining}${warning}\n\n${farewell}`;

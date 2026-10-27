@@ -70,4 +70,23 @@ function createSender({env, directory, raw}) {
     tail = job.catch(()=>{});return job;
   }};
 }
-module.exports = {settings,verify,reserve,createSender,formatNotification};
+// Separate capability: existing attendance formatting/validation stays unchanged.
+function createExpirySender({env,directory,raw}) {
+  const token=settings(env); raw ||= new MaxApi(token);
+  const {expiryTime,formatExpiry}=require('./fitpp-subscription-notifications.cjs');
+  return {async send(item,binding,now=Date.now()) {
+    if(item?.kind!=='expiry' || item.clientId!=='demo-client-1' ||
+       typeof item.subscriptionId!=='string' || !item.subscriptionId ||
+       !validBinding(binding,item.clientId) ||
+       item.maxChatId!==binding.bindings.find(b=>b.clientId===item.clientId).maxChatId ||
+       !Number.isFinite(expiryTime(item.expires)) || now<expiryTime(item.expires) ||
+       now-expiryTime(item.expires)>45000) throw Error('EXPIRY_CANDIDATE_REFUSED');
+    const text=formatExpiry(item);
+    await verify(raw,binding,item.clientId);
+    // Date-based claim intentionally suppresses any return to a previous expiry date.
+    if(!reserve(directory,'expiry-v1:'+JSON.stringify([item.clientId,item.subscriptionId,item.expires])))return 'duplicate';
+    try {await raw.send(String(item.maxChatId),{text,notify:false});return 'sent'}
+    catch {return 'uncertain'}
+  }};
+}
+module.exports = {settings,verify,reserve,createSender,createExpirySender,formatNotification};

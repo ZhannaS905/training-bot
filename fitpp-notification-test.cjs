@@ -31,6 +31,11 @@ async function main(env=process.env,args=process.argv.slice(2),{
     fs.mkdirSync(directory,{recursive:true,mode:0o700});
   }
   const sender=createSender({env,directory}), session=createPreviewSession();
+  const expiryEnabled=env.FITPP_NOTIFICATION_EXPIRY_ENABLED==='true';
+  const expirySession=require('./src/fitpp-subscription-notifications.cjs').createExpirySession();
+  const expirySender=require('./src/fitpp-notification-send.cjs').createExpirySender({env,directory});
+  const receipts=require('./src/fitpp-receipt-notifications.cjs');
+  const receiptSession=receipts.createReceiptSession(live&&env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?{directory}:{}), receiptSender=receipts.createReceiptSender({env,directory});
   let token=await signIn(env),expires=Date.now()+45*60000;
   do {
     if(Date.now()>=expires){token=await signIn(env);expires=Date.now()+45*60000}
@@ -38,6 +43,19 @@ async function main(env=process.env,args=process.argv.slice(2),{
     await sender.verify(binding);
     if(mode==='--verify'){console.log('FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write');return}
     const {baseline,candidates}=session.check(state,binding);
+    for(const item of (env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?receiptSession.check(state,binding):[])){
+      const fresh=await readBoth(token);
+      if(receipts.current(item,fresh.main,fresh.binding)){
+        if(!live)console.log('FITPP_RECEIPT_PREVIEW '+JSON.stringify(receipts.format(item)));
+        console.log('FITPP_RECEIPT_RESULT '+(live?await receiptSender.send(item,fresh.main,fresh.binding):'dry-run'));
+      }
+    }
+    if(expiryEnabled)for(const item of expirySession.check(state,binding,Date.now())) {
+      // Refresh immediately before attempting: extension/cancellation/balance may change.
+      const fresh=await readBoth(token);
+      if(require('./src/fitpp-subscription-notifications.cjs').stillCurrent(item,fresh.main,fresh.binding))
+        console.log('FITPP_EXPIRY_RESULT '+(live?await expirySender.send(item,fresh.binding):'dry-run'));
+    }
     if(baseline)console.log('FITPP_NOTIFICATION_BASELINE no_history_send');
     else if(candidates.length)console.log('FITPP_NOTIFICATION_CANDIDATES '+candidates.length);
     else if(Date.now()-lastEmptyCandidatesLog>=60*60000){

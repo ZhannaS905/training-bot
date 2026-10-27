@@ -63,9 +63,9 @@ function createReceiptSession({directory}={}){
   // sender claims suppress already attempted events, including uncertain sends.
   if(!seen){
    const baseline=initialBaseline(directory,entries.map(([id])=>id));
-   // Recovery is deliberately limited to freeze. Purchase/extension retain their
-   // prior no-history-on-restart policy.
-   seen=new Set(entries.filter(([id,r])=>!directory||r?.type!=='freeze'||baseline.has(id)).map(([id])=>id));
+   // The original durable cutoff applies to every receipt event type. Claims,
+   // not a fresh in-memory baseline, suppress attempts after a restart.
+   seen=new Set(directory?baseline:entries.map(([id])=>id));
    if(!directory)return [];
   }
   const result=[];

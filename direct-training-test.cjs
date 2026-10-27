@@ -12,7 +12,7 @@ async function main({env=process.env}={}) {
    return {...load('firebase/app'),...load('firebase/auth'),...load('firebase/firestore')};
   });
   prepared=await at('RUNTIME_PREPARE',()=>require('./src/fitpp-direct-runtime').prepare({env,sdk}));
-  autopost=await at('AUTOPOST_PREPARE',()=>autopostModule.prepare({env,storeFactory:prepared.autopostStore}));
+  autopost=await at('AUTOPOST_PREPARE',()=>autopostModule.prepare({env,storeFactory:prepared.autopostStore,booking:prepared.dailyBooking}));
   const server=await at('BRIDGE_START',()=>require('./src/fitpp-test-bridge').main({...prepared,autopost}));
   // Drain Firestore work before closing the shared authenticated session.
   server.once('close',()=>void (async()=>{if(autopost)await autopost.close();await prepared.close()})().catch(()=>console.error('DIRECT_CLOSE_FAILED')));

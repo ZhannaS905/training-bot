@@ -31,7 +31,7 @@ async function capability(c,{raw=new MaxApi(c.token)}={}){
   if(member.user_id!==Number(c.expectedId)||member.is_bot!==true)throw Error('AUTOPOST_MEMBERSHIP_REFUSED');
  }
  await verify();
- return {verify,async send(p){
+ return {verify,async answer(id){if(typeof id!=='string'||!id.trim()||id.length>256)throw Error('CALLBACK_ID_REQUIRED');return raw.request('POST','/answers',{callback_id:id},{})},async send(p){
   await verify();return raw.send(CHAT,pollBody(p),{disableLinkPreview:[0,6].includes(new Date(p.date+'T12:00:00Z').getUTCDay())});
  },async edit(p,{beforePut=async()=>{}}={}){
   if(p.status!=='published'||!MID.test(p.mid))throw Error('AUTOPOST_EDIT_REFUSED');
@@ -43,8 +43,8 @@ async function capability(c,{raw=new MaxApi(c.token)}={}){
 }
 function pollBody(p){return body({...p,votes:new Map(p.order.map(uid=>[uid,p.votes[uid]]))})}
 class Autopost{
- constructor({store,api,admins=[],now=()=>new Date(),log=console.error}){
-  Object.assign(this,{store,api,admins,now,log});this.tail=Promise.resolve();this.stopped=false;this.startedAt=+now();this.lastTick=this.startedAt;
+ constructor({store,api,booking,admins=[],now=()=>new Date(),log=console.error}){
+  Object.assign(this,{store,api,booking,admins,now,log});this.tail=Promise.resolve();this.stopped=false;this.startedAt=+now();this.lastTick=this.startedAt;
  }
  run(job){const next=this.tail.then(()=>{if(!this.stopped)return job()});this.tail=next.catch(()=>{});return next}
  async publish(date){
@@ -79,28 +79,33 @@ class Autopost{
  })}
  receive(u){
   const m=u?.message,cb=u?.callback;
-  if(String(m?.recipient?.chat_id)!==CHAT||m.recipient.chat_type!=='chat')return Promise.resolve(false);
+  if(String(m?.recipient?.chat_id)!==CHAT||m.recipient.chat_type!=='chat'){if(u?.update_type==='message_callback')this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'chat_mismatch'}));return Promise.resolve(false);}
   const match=/^poll:([a-f0-9-]{36}):(yes|cancel)$/.exec(cb?.payload||'');
   // The exact old pilot and private/contact traffic never wait on our queue or database.
-  if(match?.[1]===POLL.uuid)return Promise.resolve(false);
-  if(m?.body?.text!=='/тестопрос-сегодня'&&!match)return Promise.resolve(false);
+  if(match?.[1]===POLL.uuid){this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'historical_pilot_route'}));return Promise.resolve(false);}
+  if(m?.body?.text!=='/тестопрос-сегодня'&&!match){if(u?.update_type==='message_callback')this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'payload_rejected'}));return Promise.resolve(false);}
   return this.run(async()=>{
    const t=moscow(this.now());
    if(u.update_type==='message_created'&&m.sender?.is_bot===false&&Number.isSafeInteger(m.sender.user_id)&&this.admins.includes(String(m.sender.user_id))&&typeof m.body?.mid==='string'&&m.body.mid&&m.body.text==='/тестопрос-сегодня'){
     const at=m.timestamp??u.timestamp;if(!Number.isSafeInteger(at)||Math.abs(+this.now()-at)>60000)return true;
     await this.publish(t.date);return true;
    }
-   if(!match||u.update_type!=='message_callback'||t.date===POLL.date||+this.now()>=closesAt(t.date)||cb?.user?.is_bot!==false||!Number.isSafeInteger(cb.user.user_id)||cb.user.user_id<=0||typeof cb.callback_id!=='string'||!cb.callback_id||cb.callback_id.length>256)return false;
-   const at=cb.timestamp??u.timestamp;if(!Number.isSafeInteger(at)||Math.abs(+this.now()-at)>86400000||at>+this.now()+30000)return true;
+   if(!match||u.update_type!=='message_callback'||t.date===POLL.date||+this.now()>=closesAt(t.date)||cb?.user?.is_bot!==false||!Number.isSafeInteger(cb.user.user_id)||cb.user.user_id<=0||typeof cb.callback_id!=='string'||!cb.callback_id.trim()||cb.callback_id.length>256){this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'callback_or_window_rejected'}));return false;}
+   const at=cb.timestamp??u.timestamp;if(!Number.isSafeInteger(at)||Math.abs(+this.now()-at)>86400000||at>+this.now()+30000||(cb.timestamp!==undefined&&u.timestamp!==undefined&&cb.timestamp!==u.timestamp)){this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'timestamp_rejected'}));return true;}
    const p=await this.store.read(t.date);
-   if(!p||p.id!==match[1]||p.mid!==m.body?.mid)return false;
+   if(!p||p.status!=='published'||p.id!==match[1]||p.mid!==m.body?.mid){this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'current_poll_mismatch'}));return false;}
    const name=[cb.user.first_name,cb.user.last_name].filter(x=>typeof x==='string').join(' ').replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,100)||`Участник ${cb.user.user_id}`;
-   await this.store.vote(t.date,{id:cb.callback_id,uuid:match[1],mid:m.body.mid,uid:String(cb.user.user_id),at,action:match[2],name},pollBody);return true;
+   let applied;try{applied=await this.store.vote(t.date,{id:cb.callback_id,uuid:match[1],mid:m.body.mid,uid:String(cb.user.user_id),at,action:match[2],name},pollBody);}catch(error){this.log(JSON.stringify({event:'training_test_callback',stage:'vote',reason:'transaction_failed'}));throw error}
+   this.log(JSON.stringify({event:'training_test_callback',stage:'vote',applied:applied===true}));
+   try{if(this.booking){const result=await this.booking.receive(u,p);this.log(JSON.stringify({event:'training_test_callback',stage:'fitpp_booking',applied:result.applied===true,duplicate:result.duplicate===true,skipped:result.reason==='outside_test_binding'}));}}catch(error){const safe=new Set(['DAILY_POLL_SCOPE_REJECTED','DAILY_STATE_MISSING','DAILY_MAIN_REJECTED','DAILY_WORKOUT_REJECTED','UNBOUND_OR_UNKNOWN_POLL','CLIENT_REJECTED','WORKOUT_CHANGED','POLL_CLOSED','EVENT_TIME','DIRECT_WRITES_DISABLED']);this.log(JSON.stringify({event:'training_test_callback',stage:'fitpp_booking',reason:safe.has(error?.message)?error.message:'transaction_failed'}));throw Error('DAILY_BOOKING_FAILED')}
+   // Empty answer acknowledges the tap without replacing text or its keyboard.
+   if(this.api.answer)try{await this.api.answer(cb.callback_id);this.log(JSON.stringify({event:'training_test_callback',stage:'answer',ok:true}));}catch{this.log(JSON.stringify({event:'training_test_callback',stage:'answer',ok:false}));}
+   return true;
   })
  }
  close(){if(!this.closeFlight)this.closeFlight=(async()=>{await this.tail;this.stopped=true;await this.store.close()})();return this.closeFlight}
 }
-async function prepare({env=process.env,storeFactory,now,raw}={}){
+async function prepare({env=process.env,storeFactory,now,raw,booking}={}){
  const c=await at('AUTOPOST_SETTINGS',()=>settings(env));if(!c)return null;
  await at('AUTOPOST_STORE_FACTORY',()=>{if(typeof storeFactory!=='function')throw Error('AUTOPOST_FIRESTORE_REQUIRED')});
  const api=await at('AUTOPOST_MAX_IDENTITY',()=>capability(c,{raw}));
@@ -110,7 +115,7 @@ async function prepare({env=process.env,storeFactory,now,raw}={}){
  });
  // Server-only read, no local cache fallback and no startup writes.
  await at('AUTOPOST_FIRST_READ',()=>store.read(moscow(now?now():new Date()).date));
- return new Autopost({store,api,admins:c.admins,now});
+ return new Autopost({store,api,booking,admins:c.admins,now});
 }
 function attach(service,{schedule=setInterval,cancel=clearInterval}={}){
  let busy=false;const tick=()=>{if(busy)return;busy=true;void service.tick().catch(()=>service.log('Training Test: autopost tick refused.')).finally(()=>{busy=false})};

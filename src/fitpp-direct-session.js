@@ -32,7 +32,7 @@ async function connect({env,sdk}) {
   await validateAuth();
   raw=sdk.getFirestore(app);
   const {createDirectDb}=require('./fitpp-direct-db');
-  const db=createDirectDb({sdk,raw,projectId:c.projectId,botUid:c.uid,validateAuth,getUid:()=>auth.currentUser?.uid,writeEnabled:()=>env.FITPP_DIRECT_WRITES_ENABLED==='true'});
+  const db=createDirectDb({sdk,raw,projectId:c.projectId,botUid:c.uid,validateAuth,getUid:()=>auth.currentUser?.uid,writeEnabled:()=>env.FITPP_DIRECT_WRITES_ENABLED==='true',dailyBotId:env.TRAINING_TEST_AUTOPOST_ENABLED==='true'?env.TEST_EXPECTED_BOT_ID:undefined});
   // Firebase client SDK owns refresh lifecycle. Never persist or log tokens.
   // Separate capability: never widen the booking adapter's paths or write flag.
   function contactStore(botId,{writeEnabled=()=>false}={}) {

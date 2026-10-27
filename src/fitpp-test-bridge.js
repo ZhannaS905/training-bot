@@ -25,8 +25,9 @@ async function signedPost(s,path,payload,{transport=fetch,now=Date.now}={}){
 function receiver(s,{transport=fetch,now=Date.now,log=console.log,sync,optimistic,clock=()=>performance.now()}={}){
  return {async receive(u,receivedAt=clock()){
  const p=s.scope;
- if(u?.update_type!=='message_callback'||String(u.message?.recipient?.chat_id)!==p.chat||u.message?.recipient?.chat_type!=='chat'||u.message?.body?.mid!==p.mid||String(u.callback?.user?.user_id)!==String(p.user)||u.callback?.user?.is_bot!==false||!['poll:'+p.uuid+':yes','poll:'+p.uuid+':cancel'].includes(u.callback.payload))return;
- if(typeof u.callback.callback_id!=='string'||!u.callback.callback_id||u.callback.callback_id.length>256)throw Error('CALLBACK_ID_REQUIRED');
+ const reason=u?.update_type!=='message_callback'?'update_type':String(u.message?.recipient?.chat_id)!==p.chat||u.message?.recipient?.chat_type!=='chat'?'chat_mismatch':u.message?.body?.mid!==p.mid?'mid_mismatch':String(u.callback?.user?.user_id)!==String(p.user)||u.callback?.user?.is_bot!==false?'user_mismatch':!['poll:'+p.uuid+':yes','poll:'+p.uuid+':cancel'].includes(u.callback?.payload)?'uuid_or_action_mismatch':null;
+ if(reason){log(JSON.stringify({event:'fitpp_test_callback_rejected',reason}));return;}
+ if(typeof u.callback.callback_id!=='string'||!u.callback.callback_id.trim()||u.callback.callback_id.length>256)throw Error('CALLBACK_ID_REQUIRED');
  const at=u.callback.timestamp??u.timestamp;if(!Number.isSafeInteger(at)||Math.abs(now()-at)>86400000||at>now()+30000)throw Error('EVENT_TIME_REJECTED');
  const event={update_type:'message_callback',timestamp:u.timestamp,callback:{callback_id:u.callback.callback_id,user:{user_id:Number(p.user),is_bot:false},payload:u.callback.payload,...(u.callback.timestamp===undefined?{}:{timestamp:u.callback.timestamp})},message:{recipient:{chat_type:'chat',chat_id:p.chat},body:{mid:p.mid}}};
  const started=clock();
@@ -74,7 +75,7 @@ async function main({env=process.env,verify=guardedApi,post=signedPost,makeServe
  // Each request awaits its durable mediator result. A crash leaves delivery unacknowledged.
  const existing=combinedReceiver({callbacks,contact,owner});
  const incoming=autopost?{async receive(u){if(!await autopost.receive(u))await existing.receive(u)}}:existing;
- const handler=createWebhook(incoming,c.secret).listeners('request')[0];
+ const handler=createWebhook(incoming,c.secret,{log:entry=>console.log(JSON.stringify(entry))}).listeners('request')[0];
  const server=makeServer((req,res)=>{if(req.method==='GET'&&req.url==='/health')return res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,mode:'fitpp-test-exact-poll-bridge',callbacksOnly:env.OWNER_DIALOG_ENABLED!=='true',autopostEnabled:!!autopost,autopostStorage:autopost?'firestore':null,pollDisplaySync:s.pollSync,pollDisplayReady:optimistic?optimistic.status().ready:null}));void handler(req,res)});
  await at('LISTEN',()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(3000,'0.0.0.0',resolve)})).catch(error=>{loop.stop();throw error});
  const closeAutopost=autopost?require('./training-test-autopost').attach(autopost):null;

@@ -54,16 +54,22 @@
     if (sub.freezes === undefined) return;
     if (!Array.isArray(sub.freezes) || !Number.isSafeInteger(sub.left) || sub.left < 0) throw fail('Повреждена история заморозок.');
     dayNumber(sub.expires);
-    let previousEnd = '', expected;
+    const totalExtensionDays = 14 - extensionRemaining(sub);
+    let previousEnd = '', expected, extensionsAfterFreezes = 0;
     for (const f of sub.freezes) {
       if (!plain(f) || f.version !== 1) throw fail('Неизвестный формат заморозки.');
       const start = dayNumber(f.start), end = dayNumber(f.end), planned = dayNumber(f.returnDate);
       dayNumber(f.baseExpires);
       if (end < start || planned <= start || end > planned || f.start < previousEnd ||
           f.start > f.baseExpires || (expected && f.baseExpires !== expected)) throw fail('Повреждена история заморозок.');
-      expected = addDays(f.baseExpires, end-start);
+      // Candidate: account for explicit manual extensions after this freeze ended.
+      const extra = f.extensionDaysAfter === undefined ? 0 : f.extensionDaysAfter;
+      if (!Number.isSafeInteger(extra) || extra < 0 || extra > 14) throw fail('Повреждена история заморозок.');
+      extensionsAfterFreezes += extra;
+      expected = addDays(f.baseExpires, end-start+extra);
       previousEnd = f.end;
     }
+    if (extensionsAfterFreezes > totalExtensionDays) throw fail('Повреждена история заморозок.');
     if (expected && sub.expires !== expected) throw fail('Срок не соответствует истории заморозок.');
   }
   function frozenOn(sub, date = localDate()) {
@@ -126,6 +132,11 @@
     if (!Number.isSafeInteger(action.days) || action.days < 1 || action.days > extensionRemaining(sub)) throw fail('Продление: от 1 дня, не более 14 дней суммарно на абонемент.');
     sub.expires = addDays(sub.expires, action.days);
     sub.extensionDays = (sub.extensionDays ?? 0) + action.days;
+    if (sub.freezes?.length) {
+      const last = sub.freezes.at(-1);
+      last.extensionDaysAfter = (last.extensionDaysAfter ?? 0) + action.days;
+    }
+    validateFreezes(sub);
   }
   function changeFreeze(data, action, today) {
     dayNumber(today);

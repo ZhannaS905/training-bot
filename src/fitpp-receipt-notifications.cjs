@@ -1,4 +1,5 @@
 'use strict';
+const { isDeepStrictEqual } = require('node:util');
 const {validBinding}=require('./fitpp-notification-dry-run.cjs');
 const {expiryTime,formatPurchase}=require('./fitpp-subscription-notifications.cjs');
 const {frozenOn}=require('../direct-core/FitPP-Test/persistence.js');
@@ -14,7 +15,7 @@ function valid(r,id){
 }
 function current(item,state,binding){
  const r=state.mutationReceipts?.[item.requestId];
- if(!valid(r,item.requestId)||JSON.stringify(r)!==item.receipt||item.kind!==kindOf(r)||
+ if(!valid(r,item.requestId)||!isDeepStrictEqual(r, JSON.parse(item.receipt))||item.kind!==kindOf(r)||
     Object.entries(r.event).some(([key,value])=>item[key]!==value))return false;
  const cs=state.clients.filter(c=>c.id===item.clientId&&!c.archivedAt);
  const ss=cs.length===1?(cs[0].subscriptions||[]).filter(s=>s.id===item.subscriptionId&&!s.cancelledAt):[];

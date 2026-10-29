@@ -1,7 +1,7 @@
 'use strict';
 // Training Test only. Reuse the existing transactional booking engine and bindings.
 const {Service,MAIN,hash}=require('../direct-core/src/service.cjs');
-const E=require('../direct-core/FitPP-Test/persistence.js').createProductionPricingModel();
+const {confirmedDailyWorkouts}=require('../direct-core/src/confirmed-daily-workouts.cjs');
 const {CHAT,USER}=require('../direct-core/src/pilot-policy.cjs');
 const {times,moscow}=require('./schedule');
 const {validate}=require('./training-test-firestore');
@@ -31,9 +31,10 @@ function createDailyBooking({db,botId,now=Date.now}) {
    // even if the newer booking commit previously failed.
    if(p.last[USER]!==at||Object.hasOwn(p.votes,USER)!==(match[2]==='yes'))return {applied:false,reason:'stale_vote'};
    if(main.ownerUid!=='lLlMAetSG1aEeJSeBl4F4ypydEh2'||main.datasetId!=='synthetic-v1'||main.schemaVersion!==1)throw Error('DAILY_MAIN_REJECTED');
-   const workouts=E.workoutsOn(main,location,date).filter(w=>w.time===time&&!w.cancelled);
+   const workouts=confirmedDailyWorkouts(main,location,date,time);
    if(workouts.length!==1)throw Error('DAILY_WORKOUT_REJECTED');
-   const scope={chat:CHAT,mid:p.mid,uuid:p.id,date,location,workoutId:workouts[0].id,openedAt:p.createdAt,closesAt:Date.parse(date+'T'+time+':00+03:00')+3600000,open:true};
+   // Virtual scope only: confirmedTime is not persisted and does not change poll schema.
+   const scope={chat:CHAT,mid:p.mid,uuid:p.id,date,location,workoutId:workouts[0].id,confirmedTime:time,openedAt:p.createdAt,closesAt:Date.parse(date+'T'+time+':00+03:00')+3600000,open:true};
    return fn({...tx,get:ref=>ref.path===virtualPoll?Promise.resolve({exists:true,data:()=>scope}):ref.path===MAIN?Promise.resolve(ms):tx.get(ref)});
   })};
   return new Service(guarded,{now}).callback({pollUuid:match[1],id:cb.callback_id,uid:USER,at,chat:CHAT,mid:m.body.mid,payload:match[2]==='yes'?'poll_yes':'poll_cancel'});

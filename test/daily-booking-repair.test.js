@@ -2,9 +2,9 @@
 const test=require('node:test'),a=require('node:assert/strict'),{Readable}=require('node:stream');
 const {database}=require('./helpers/autopost-firestore'),{createDirectDb}=require('../src/fitpp-direct-db'),{createDailyBooking}=require('../src/fitpp-daily-booking'),{Autopost,pollBody}=require('../src/training-test-autopost'),{createWebhook}=require('../src/memory-test-webhook');
 const {Service,MAIN,BOOKINGS,hash,bookingKey}=require('../direct-core/src/service.cjs'),{CHAT,USER}=require('../direct-core/src/pilot-policy.cjs');
-const date='2026-10-27',now=Date.parse(date+'T12:00:00Z'),uuid='2058779d-f536-4b18-b725-f7fc842ac2a8',mid='mid.ffffb6ed054c9f4801a17c28b22e3473';
+const date='2026-10-29',now=Date.parse(date+'T12:00:00Z'),uuid='2058779d-f536-4b18-b725-f7fc842ac2a8',mid='mid.ffffb6ed054c9f4801a17c28b22e3473';
 function fixture(){
- const f=database(),logs=[],calls=[],main=structuredClone(require('../direct-core/fixtures/main.json'));main.clients[0].locations.push('pole');
+ const f=database(),logs=[],calls=[],main=structuredClone(require('../direct-core/fixtures/main.json'));main.clients[0].locations.push('pole');main.workouts=structuredClone(require('./helpers/daily-confirmed-workouts.json'));
  f.data.set(MAIN,main);f.data.set(BOOKINGS,{ownerUid:main.ownerUid,datasetId:'synthetic-v1',schemaVersion:1,entries:{}});f.data.set('fitppTestWorkspaces/synthetic-v1/states/bookingClock',{revision:0});f.data.set('fitppTestWorkspaces/synthetic-v1/maxBindings/'+hash(USER),{active:true,clientId:'demo-client-1'});
  const p={id:uuid,mid,version:1,botId:'123',chat:CHAT,date,status:'published',createdAt:now-3600000,votes:{},order:[],last:{},revision:0,displayedRevision:0};f.data.set('trainingTestAutopostBots/123/polls/'+date,p);
  const db=createDirectDb({sdk:f.sdk,raw:f.raw,projectId:'fitpp-test',botUid:'testuid',ownerUid:'owner',getUid:()=> 'testuid',validateAuth:async()=>{},writeEnabled:()=>true,dailyBotId:'123'}),booking=createDailyBooking({db,botId:'123',now:()=>now});
@@ -44,7 +44,7 @@ test('current mid/uuid rechecked in transaction; no poll registrations or widene
  a.throws(()=>f.db.doc('trainingTestAutopostBots/999/polls/'+date),/PATH/);a.throws(()=>f.db.doc('fitpp-crm/states/main'),/PATH/);
 });
 test('unbound, archived, cancelled workout retain booking guards',async()=>{
- for(const change of [f=>f.data.delete('fitppTestWorkspaces/synthetic-v1/maxBindings/'+hash(USER)),f=>f.data.get(MAIN).clients[0].archivedAt='now',f=>{f.data.get(MAIN).workouts={'pole_2026-10-27':{id:'pole_2026-10-27',location:'pole',originDate:date,date,time:'18:30',cancelled:true}}}]){
+ for(const change of [f=>f.data.delete('fitppTestWorkspaces/synthetic-v1/maxBindings/'+hash(USER)),f=>f.data.get(MAIN).clients[0].archivedAt='now',f=>{f.data.get(MAIN).workouts={'pole_2026-10-29':{id:'pole_2026-10-29',location:'pole',originDate:date,date,time:'18:30',cancelled:true}}}]){
   const f=fixture();f.p.last[USER]=now;f.p.votes[USER]='synthetic';f.p.order=[USER];change(f);await a.rejects(f.booking.receive(callback(),f.p));a.equal(f.data.get('fitppTestWorkspaces/synthetic-v1/states/bookingClock').revision,0);
  }
 });
@@ -57,4 +57,52 @@ test('MAX callback answer uses query callback_id and empty body, no message repl
 test('older callback cannot project stale intent while latest booking is pending; missing durable vote refuses writes',async()=>{
  const f=fixture();await a.rejects(f.booking.receive(callback(),f.p),/VOTE_MISSING/);a.equal(f.commits.length,0);
  f.p.last[USER]=now+1;f.p.votes={};f.p.order=[];a.deepEqual(await f.booking.receive(callback(),f.p),{applied:false,reason:'stale_vote'});a.equal(f.commits.length,0);
+});
+
+test('confirmed snapshot selects one persisted session despite synthetic recurring duplicate; replay, new yes, cancel and rebook preserve balances',async()=>{
+ const f=fixture(),before=structuredClone(f.data.get(MAIN));
+ const E=require('../direct-core/FitPP-Test/persistence.js').createProductionPricingModel();
+ a.equal(E.workoutsOn(before,'pole',date).filter(w=>w.time==='18:30'&&!w.cancelled).length,2);
+ a.equal(await webhook(f.service,callback('snapshot')),200);
+ a.equal(await webhook(f.service,callback('snapshot')),200);
+ a.equal(await webhook(f.service,callback('again','yes',now+1)),200);
+ a.equal(Object.keys(f.data.get(BOOKINGS).entries).length,1);
+ a.equal(await webhook(f.service,callback('undo','cancel',now+2)),200);
+ a.equal(Object.keys(f.data.get(BOOKINGS).entries).length,0);
+ a.equal(await webhook(f.service,callback('rebook','yes',now+3)),200);
+ a.equal(Object.keys(f.data.get(BOOKINGS).entries).length,1);
+ a.deepEqual(f.data.get(MAIN),before); // Includes subscriptions, balances, visits and receipts.
+});
+test('zero or two real sessions reject without booking writes; cancelled, moved or wrong time cannot substitute',async()=>{
+ for(const variant of ['none','two','cancelled','moved','time','persisted-regular-and-extra']){
+  const f=fixture(),main=f.data.get(MAIN),w=Object.values(main.workouts)[0];
+  if(variant==='none')main.workouts={};
+  if(variant==='two')main.workouts.second={...w,id:'second'};
+  if(variant==='cancelled')w.cancelled=true;
+  if(variant==='moved')w.date='2026-10-30';
+  if(variant==='time')w.time='19:00';
+  if(variant==='persisted-regular-and-extra')main.workouts['pole_'+date]={...w,id:'pole_'+date,extra:false};
+  const before=structuredClone(main);
+  a.equal(await webhook(f.service,callback(variant)),503,variant);
+  a.equal(f.data.get('trainingTestAutopostBots/123/polls/'+date).revision,1);
+  a.equal(f.data.get('fitppTestWorkspaces/synthetic-v1/states/bookingClock').revision,0);
+  a.deepEqual(f.data.get(BOOKINGS).entries,{});a.deepEqual(main,before);
+ }
+});
+test('persisted regular alone is accepted; failed vote can retry after schedule correction without clearing vote',async()=>{
+ const f=fixture(),main=f.data.get(MAIN),w=Object.values(main.workouts)[0];main.workouts={};
+ a.equal(await webhook(f.service,callback('recover')),503);
+ main.workouts['pole_'+date]={...w,id:'pole_'+date,extra:false};
+ a.equal(await webhook(f.service,callback('recover')),200);
+ a.equal(f.data.get('trainingTestAutopostBots/123/polls/'+date).revision,1);
+ a.equal(f.data.get('fitppTestWorkspaces/synthetic-v1/states/bookingClock').revision,1);
+});
+test('Service independently rejects missing, ambiguous or mismatched confirmed target for yes and cancel',async()=>{
+ for(const action of ['yes','cancel'])for(const variant of ['none','two','mismatch']){
+  const f=fixture(),main=f.data.get(MAIN),w=Object.values(main.workouts)[0];
+  f.data.set('fitppTestWorkspaces/synthetic-v1/maxPolls/'+hash([CHAT,mid]),{uuid,chat:CHAT,mid,date,location:'pole',workoutId:variant==='mismatch'?'wrong':w.id,confirmedTime:'18:30',openedAt:now-1000,closesAt:now+1000,open:true});
+  if(variant==='none')main.workouts={};if(variant==='two')main.workouts.second={...w,id:'second'};
+  await a.rejects(new Service(f.db,{now:()=>now}).callback({pollUuid:uuid,id:variant+action,uid:USER,at:now,chat:CHAT,mid,payload:action==='yes'?'poll_yes':'poll_cancel'}),/WORKOUT_CHANGED/);
+  a.equal(f.commits.length,0);
+ }
 });

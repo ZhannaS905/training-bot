@@ -1,0 +1,13 @@
+{
+  "pole_extra_group-session-op-a100166e-8371-4aec-94eb-af81383c1235-2": {
+    "cancelled": false,
+    "date": "2026-10-29",
+    "time": "18:30",
+    "periodId": "op-a100166e-8371-4aec-94eb-af81383c1235-1",
+    "extra": true,
+    "id": "pole_extra_group-session-op-a100166e-8371-4aec-94eb-af81383c1235-2",
+    "originDate": "2026-10-29",
+    "groupId": "pole",
+    "location": "pole"
+  }
+}

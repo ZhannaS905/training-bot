@@ -1,6 +1,7 @@
 'use strict';
 const {createHash}=require('node:crypto');
 const E=require('../FitPP-Test/persistence.js').createProductionPricingModel();
+const {confirmedDailyWorkouts}=require('./confirmed-daily-workouts.cjs');
 const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);
 const hash=v=>createHash('sha256').update(typeof v==='string'?v:canonical(v)).digest('hex');
 const PREFIX='fitppTestWorkspaces/synthetic-v1/',MAIN=PREFIX+'states/main',BOOKINGS=PREFIX+'states/bookings';
@@ -23,7 +24,7 @@ class Service{
  requireValue(Number.isSafeInteger(at)&&at<=this.now()+30000&&at>=this.now()-86400000,'EVENT_TIME');
  const main=await this.readMain(tx);let targetKey=key;
  if(source==='max'){
- const [binding,pollSnap]=await Promise.all([tx.get(this.ref('maxBindings',userId(uid))),tx.get(this.ref('maxPolls',pollIdentity))]);requireValue(binding.exists&&binding.data().active&&pollSnap.exists,'UNBOUND_OR_UNKNOWN_POLL');const p=pollSnap.data();requireValue(!p.uuid||p.uuid===pollUuid,'POLL_UUID_MISMATCH');requireValue(p.open&&at>=p.openedAt&&this.now()<p.closesAt,'POLL_CLOSED');targetKey=bookingKey(binding.data().clientId,p.date,p.location);requireValue(E.workoutsOn(main,p.location,p.date).some(w=>w.id===p.workoutId&&(!desired||!w.cancelled)),'WORKOUT_CHANGED');
+ const [binding,pollSnap]=await Promise.all([tx.get(this.ref('maxBindings',userId(uid))),tx.get(this.ref('maxPolls',pollIdentity))]);requireValue(binding.exists&&binding.data().active&&pollSnap.exists,'UNBOUND_OR_UNKNOWN_POLL');const p=pollSnap.data();requireValue(!p.uuid||p.uuid===pollUuid,'POLL_UUID_MISMATCH');requireValue(p.open&&at>=p.openedAt&&this.now()<p.closesAt,'POLL_CLOSED');targetKey=bookingKey(binding.data().clientId,p.date,p.location);if(Object.hasOwn(p,'confirmedTime')){const workouts=confirmedDailyWorkouts(main,p.location,p.date,p.confirmedTime);requireValue(workouts.length===1&&workouts[0].id===p.workoutId,'WORKOUT_CHANGED')}else requireValue(E.workoutsOn(main,p.location,p.date).some(w=>w.id===p.workoutId&&(!desired||!w.cancelled)),'WORKOUT_CHANGED');
  }
  let tuple;try{tuple=JSON.parse(targetKey)}catch{throw Error('KEY_INVALID')}requireValue(bookingKey(...tuple)===targetKey,'KEY_INVALID');const [cid,date,hall]=tuple,c=main.clients.find(c=>c.id===cid&&!c.archivedAt);requireValue(c&&c.locations.includes(hall),'CLIENT_REJECTED');if(desired)requireValue(E.workoutsOn(main,hall,date).some(w=>!w.cancelled),'WORKOUT_CANCELLED');
  const br=this.db.doc(BOOKINGS),vr=this.ref('bookingVersions',targetKey),bs=await tx.get(br),vs=await tx.get(vr);requireValue(bs.exists,'BOOKINGS_MISSING');const clockRef=this.db.doc(PREFIX+'states/bookingClock'),clockSnap=await tx.get(clockRef);requireValue(clockSnap.exists,'CLOCK_MISSING');const raw=bs.data(),old=vs.exists?vs.data():{revision:0,eventAt:0,booked:raw.entries[targetKey]===true};requireValue(old.booked===(raw.entries[targetKey]===true),'EXTERNAL_WRITER_DESYNC');

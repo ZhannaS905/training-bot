@@ -44,7 +44,7 @@ async function main(env=process.env,args=process.argv.slice(2),{
     if(mode==='--verify'){console.log('FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write');return}
     const {baseline,candidates}=session.check(state,binding);
     const receiptCandidates=env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?receiptSession.check(state,binding):[];
-    if(live)for(const result of await require('./src/fitpp-notification-recovery.cjs').recover({state,binding,env,directory,readFresh:()=>readBoth(token)}))
+    if(live)for(const result of await require('./src/fitpp-notification-recovery.cjs').recover({state,binding,env,directory,excludeReceiptIds:receiptCandidates.map(item=>item.requestId),readFresh:()=>readBoth(token)}))
       console.log('FITPP_RECOVERY_RESULT '+result);
     for(const item of receiptCandidates){
       const fresh=await readBoth(token);

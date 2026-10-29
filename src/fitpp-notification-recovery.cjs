@@ -21,9 +21,10 @@ function candidates(state,binding,now=Date.now()){
   if(!/^demo-client-[1-4]$/.test(cid)||row.recoverNotifications!==true||!validBinding(binding,cid))continue;
   const client=state.clients.find(c=>c.id===cid&&!c.archivedAt);if(!client)continue;
   for(const [id,r]of Object.entries(state.mutationReceipts||{})){
-   if(r?.event?.clientId!==cid)continue;
+   const event=receipts.eventFor(r,id,state);
+   if(event?.clientId!==cid)continue;
    const kind=r.type==='subscription'?'purchase':r.type==='freeze'?'freeze':'extension';
-   const item={...r.event,kind,requestId:id,receipt:JSON.stringify(r)};
+   const item={...event,kind,requestId:id,receipt:JSON.stringify(r)};
    if(receipts.current(item,state,binding))result.push({kind:'receipt',clientId:cid,item,keys:['receipt-v1:'+id],maxChatId:row.maxChatId});
   }
   for(const [wid,ops]of Object.entries(state.visitOps)){
@@ -53,11 +54,13 @@ function format(item){
  else text=`${item.status==='attended'?'✅ Посещение':'🔥 Занятие сгорело'}\n\n📅 ${item.date.split('-').reverse().join('.')}\nС абонемента списано 1 занятие.\n\nСейчас по абонементу осталось занятий: ${item.remaining}`;
  return '📨 Пропущенное уведомление\n\n'+text;
 }
-async function recover({state,binding,readFresh,env,directory,raw,now=Date.now}){
+async function recover({state,binding,readFresh,env,directory,raw,now=Date.now,excludeReceiptIds=[]}){
  const completion=row=>'recovery-completed-v1:'+JSON.stringify([row.clientId,row.maxUserId,row.maxChatId]);
- const rows=(binding?.bindings||[]).filter(row=>/^demo-client-[1-4]$/.test(row.clientId)&&row.recoverNotifications===true&&validBinding(binding,row.clientId)&&!claimed(directory,completion(row)));
+ const rows=(binding?.bindings||[]).filter(row=>/^demo-client-[1-4]$/.test(row.clientId)&&row.recoverNotifications===true&&validBinding(binding,row.clientId));
+ const completed=new Set(rows.filter(row=>claimed(directory,completion(row))).map(row=>row.clientId));
+ const excluded=new Set(excludeReceiptIds);
  const scoped={...binding,bindings:(binding?.bindings||[]).map(row=>rows.includes(row)?row:{...row,recoverNotifications:false})};
- const unclaimed=candidates(state,scoped,now()).filter(item=>!item.keys.some(key=>claimed(directory,key)));
+ const unclaimed=candidates(state,scoped,now()).filter(item=>(item.kind==='receipt'?!excluded.has(item.item.requestId):!completed.has(item.clientId))&&!item.keys.some(key=>claimed(directory,key)));
  const enabled=item=>(item.kind!=='receipt'||env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true')&&
    (item.kind!=='expiry'||env.FITPP_NOTIFICATION_EXPIRY_ENABLED==='true');
  const deferred=new Set(unclaimed.filter(item=>!enabled(item)).map(item=>item.clientId));

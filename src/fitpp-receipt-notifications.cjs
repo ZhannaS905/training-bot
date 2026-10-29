@@ -13,10 +13,62 @@ function valid(r,id){
    (r.type==='extendSubscription'&&Number.isFinite(expiryTime(e.oldExpires))&&Number.isSafeInteger(e.days)&&e.days>0&&e.days<=14&&Date.parse(e.newExpires)-Date.parse(e.oldExpires)===e.days*86400000)||
    (r.type==='freeze'&&Number.isFinite(expiryTime(e.oldExpires))&&Number.isFinite(expiryTime(e.freezeStart))&&Number.isFinite(expiryTime(e.returnDate))&&Number.isSafeInteger(e.days)&&e.days>0&&Date.parse(e.returnDate)-Date.parse(e.freezeStart)===e.days*86400000&&Date.parse(e.newExpires)-Date.parse(e.oldExpires)===e.days*86400000));
 }
+// The unified FitPP writer stores the committed action as canonical JSON in
+// signature. Older bot receipts use event. Normalize both without rewriting data.
+function actionFor(r,id){
+ try{
+  if(typeof r?.signature!=='string'||r.signature.length>32768)return null;
+  const value=JSON.parse(r.signature),a=value?.action;
+  return a?.operationId===id&&a.type===r.type&&Number.isFinite(expiryTime(value.operationDay))?a:null;
+ }catch{return null}
+}
+function eventFor(r,id,state){
+ if(r?.event!==undefined)return valid(r,id)?r.event:null;
+ const a=actionFor(r,id);
+ if(!a||!['subscription','extendSubscription','freeze'].includes(a.type)||
+    !Number.isSafeInteger(r.revision)||r.revision<1||r.revision>state._fitppRevision)return null;
+ const cs=state.clients.filter(c=>c.id===a.clientId&&!c.archivedAt);if(cs.length!==1)return null;
+ const subs=cs[0].subscriptions||[];
+ let sub;
+ if(a.type==='subscription'){
+  const matches=subs.filter(s=>s.saleOperationId===id);if(matches.length!==1)return null;sub=matches[0];
+ }else{
+  if(!Number.isSafeInteger(a.subscriptionIndex)||a.subscriptionIndex<0)return null;
+  sub=subs[a.subscriptionIndex];
+ }
+ if(!sub||sub.cancelledAt||typeof sub.saleOperationId!=='string'||typeof sub.saleRequest!=='string')return null;
+ const sale=state.mutationReceipts?.[sub.saleOperationId];
+ let saleAction;
+ try{
+  const storedSale=JSON.parse(sub.saleRequest);saleAction=actionFor(sale,sub.saleOperationId)||storedSale;
+  if(!saleAction||saleAction.type!=='subscription'||saleAction.operationId!==sub.saleOperationId||saleAction.clientId!==a.clientId||
+     !isDeepStrictEqual(JSON.parse(sub.saleRequest),Object.fromEntries(Object.entries(saleAction).filter(([k])=>k!=='balanceProofId')))||
+     sub.id!=='subscription-'+sub.saleOperationId||sub.startDate!==saleAction.date||
+     (sale?.revision!==undefined&&(!Number.isSafeInteger(sale.revision)||sale.revision>r.revision)))return null;
+ }catch{return null}
+ const add=(date,n)=>{if(!Number.isFinite(expiryTime(date))||!Number.isSafeInteger(n))return null;try{return new Date(Date.parse(date+'T00:00:00Z')+n*86400000).toISOString().slice(0,10)}catch{return null}};
+ const event={version:1,operationId:id,cycleId:sub.saleOperationId,clientId:a.clientId,subscriptionId:sub.id};
+ if(a.type==='subscription'){
+  if(!Number.isSafeInteger(sub.terms?.sessions)||sub.terms.sessions<1||!Number.isSafeInteger(sub.terms?.durationDays)||sub.terms.durationDays<1)return null;
+  Object.assign(event,{oldExpires:null,newExpires:add(sub.startDate,sub.terms.durationDays),sessions:sub.terms.sessions});
+ }else if(a.type==='extendSubscription'){
+  if((sale?.revision!==undefined&&sale.revision>=r.revision)||!Number.isSafeInteger(a.expectedUsed)||a.expectedUsed<0||
+     !Number.isSafeInteger(a.days)||a.days<1||a.expectedUsed+a.days>14||
+     !Number.isSafeInteger(sub.extensionDays)||sub.extensionDays<a.expectedUsed+a.days)return null;
+  Object.assign(event,{oldExpires:a.expectedExpires,newExpires:add(a.expectedExpires,a.days),days:a.days});
+ }else{
+  const freezes=(sub.freezes||[]).filter(f=>f.version===1&&f.returnDate===a.returnDate&&
+    (a.startDate===undefined||f.start===a.startDate));
+  if(freezes.length!==1)return null;
+  const f=freezes[0],days=(Date.parse(f.returnDate)-Date.parse(f.start))/86400000;
+  Object.assign(event,{oldExpires:f.baseExpires,newExpires:add(f.baseExpires,days),freezeStart:f.start,returnDate:f.returnDate,days});
+ }
+ return valid({type:r.type,event},id)?event:null;
+}
 function current(item,state,binding){
- const r=state.mutationReceipts?.[item.requestId];
- if(!valid(r,item.requestId)||!isDeepStrictEqual(r, JSON.parse(item.receipt))||item.kind!==kindOf(r)||
-    Object.entries(r.event).some(([key,value])=>item[key]!==value))return false;
+ const r=state.mutationReceipts?.[item.requestId],event=eventFor(r,item.requestId,state);
+ if(!event||!isDeepStrictEqual(r, JSON.parse(item.receipt))||item.kind!==kindOf(r)||
+    Object.entries(event).some(([key,value])=>item[key]!==value))return false;
  const cs=state.clients.filter(c=>c.id===item.clientId&&!c.archivedAt);
  const ss=cs.length===1?(cs[0].subscriptions||[]).filter(s=>s.id===item.subscriptionId&&!s.cancelledAt):[];
  if(ss.length!==1||(ss[0].saleOperationId||ss[0].id)!==item.cycleId||!validBinding(binding,item.clientId))return false;
@@ -72,8 +124,9 @@ function createReceiptSession({directory}={}){
   const result=[];
   for(const [id,r]of entries){
    if(seen.has(id))continue;seen.add(id);
-   if(!valid(r,id)||!/^demo-client-[1-4]$/.test(r.event.clientId))continue;
-   const item={...r.event,kind:kindOf(r),requestId:id,receipt:JSON.stringify(r)};
+   const event=eventFor(r,id,state);
+   if(!event||!/^demo-client-[1-4]$/.test(event.clientId))continue;
+   const item={...event,kind:kindOf(r),requestId:id,receipt:JSON.stringify(r)};
    if(current(item,state,binding))result.push(item);
   }
   return result;
@@ -86,4 +139,4 @@ function format(item){
  return `📅 Абонемент продлён!\n\n➕ Продление: ${item.days} ${daysLabel(item.days)}\n📅 Новая дата окончания: ${item.newExpires.split('-').reverse().join('.')}\n\n🫶 Ждём на тренировке!`;
 }
 function createReceiptSender({env,directory,raw}){const {settings,verify}=require('./fitpp-notification-send.cjs');const token=settings(env);raw||=new (require('./api').MaxApi)(token);return {async send(item,state,binding){if(!current(item,state,binding))return 'stale';await verify(raw,binding,item.clientId);const text=format(item);if(!reserve(directory,'receipt-v1:'+item.requestId))return 'duplicate';try{await raw.send(String(binding.bindings.find(b=>b.clientId===item.clientId).maxChatId),{text,notify:false});return 'sent';}catch{return 'uncertain';}}};}
-module.exports={createReceiptSession,createReceiptSender,current,format};
+module.exports={createReceiptSession,createReceiptSender,current,format,eventFor};

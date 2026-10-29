@@ -65,9 +65,9 @@ function firebaseStore({sdk,db,botId}){
  }
  return {inspect:async()=>{await operate(null);},find:number=>operate(number),bind:(number,binding)=>operate(number,binding)};
 }
-function contactLinking({botId,token,allowedUserIds,store,now=Date.now}){
+function contactLinking({botId,token,allowedUserIds=[],store,now=Date.now}){
  if(!positive(botId)||typeof token!=='string'||!token||!Array.isArray(allowedUserIds)||
-    !allowedUserIds.length||!allowedUserIds.every(positive)||!store)throw Error('TEST_LINK_CONFIG_REFUSED');
+    !allowedUserIds.every(positive)||!store)throw Error('TEST_LINK_CONFIG_REFUSED');
  const allowed=new Set(allowedUserIds),sessions=new Map();
  const draft=(userId,chatId,text,buttons=[])=>({state:'blocked',sendAllowed:false,userId,chatId,
   body:{text,attachments:buttons.length?[{type:'inline_keyboard',payload:{buttons}}]:[]}});
@@ -79,7 +79,7 @@ function contactLinking({botId,token,allowedUserIds,store,now=Date.now}){
   const m=u.message,r=m?.recipient;
   const user=u.update_type==='bot_started'?u.user:u.update_type==='message_callback'?u.callback?.user:m?.sender;
   const chatId=u.update_type==='bot_started'?u.chat_id:r?.chat_id;
-  if(!allowed.has(user?.user_id)||user.is_bot!==false||!chat(chatId))return;
+  if(!positive(user?.user_id)||(allowed.size&&!allowed.has(user.user_id))||user.is_bot!==false||!chat(chatId))return;
   if(u.update_type!=='bot_started'&&(!['message_created','message_callback'].includes(u.update_type)||r?.chat_type!=='dialog'||
      (u.update_type==='message_callback'?
       r.user_id!==user.user_id||m.sender?.user_id!==botId||m.sender?.is_bot!==true:

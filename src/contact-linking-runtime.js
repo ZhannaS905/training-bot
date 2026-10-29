@@ -7,9 +7,8 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now,session
  if(env.CONTACT_LINK_ENABLED!=='true'||env.OWNER_DIALOG_ENABLED==='true'||
     !['false','true'].includes(env.CONTACT_LINK_REPLY_ENABLED)||
     !['false','true'].includes(env.CONTACT_LINK_WRITES_ENABLED))throw Error('CONTACT_CONFIG_REFUSED');
- // Reuse the running Training Test token fallback and admin configuration.
+ // Admin configuration governs admin commands, never participant activation.
  const c=config(env);
- if(c.admins.length!==1||c.admins[0]!=='5819064')throw Error('CONTACT_TEST_ADMIN_REQUIRED');
  const sessionModule=require('./fitpp-direct-session');
  // This mode never starts the booking transport or scheduler. Its write capability
  // remains separate even if the existing server has direct booking flags enabled.
@@ -23,21 +22,21 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now,session
  try{
   const store=session.contactStore(identity.user_id,{writeEnabled:()=>env.CONTACT_LINK_WRITES_ENABLED==='true'});
   await store.inspect(); // Read-only transaction: main + registry, no phone output.
-  const handler=contactLinking({botId:identity.user_id,token:c.token,allowedUserIds:[5819064],store,now});
+  const handler=contactLinking({botId:identity.user_id,token:c.token,store,now});
   const seen=new Set();let tail=Promise.resolve();
   async function receive(u){
    const user=u?.update_type==='bot_started'?u.user:u?.update_type==='message_callback'?u.callback?.user:u?.message?.sender;
    const chat=u?.update_type==='bot_started'?u.chat_id:u?.message?.recipient?.chat_id;
-   if(user?.user_id!==5819064||user.is_bot!==false||!Number.isSafeInteger(chat)||chat===0)return;
+   if(!Number.isSafeInteger(user?.user_id)||user.user_id<=0||user.is_bot!==false||!Number.isSafeInteger(chat)||chat===0)return;
    // Reserve before processing/sending; never retry an ambiguous MAX send.
-   const key=u.update_type==='bot_started'?`start:${u.timestamp}`:
-    u.update_type==='message_callback'?`callback:${u.callback?.callback_id||''}`:`message:${u.message?.body?.mid||''}`;
+   const key=u.update_type==='bot_started'?`start:${user.user_id}:${chat}:${u.timestamp}`:
+    u.update_type==='message_callback'?`callback:${user.user_id}:${chat}:${u.callback?.callback_id||''}`:`message:${user.user_id}:${chat}:${u.message?.body?.mid||''}`;
    if(key.endsWith(':')||seen.has(key))return;
    if(seen.size>=512)throw Error('CONTACT_EVENT_LIMIT');
    seen.add(key);
    const draft=await handler.receive(u);
    if(draft&&env.CONTACT_LINK_REPLY_ENABLED==='true'){
-    if(draft.userId!==5819064||draft.chatId!==chat)throw Error('CONTACT_RECIPIENT_REFUSED');
+    if(draft.userId!==user.user_id||draft.chatId!==chat)throw Error('CONTACT_RECIPIENT_REFUSED');
     await raw.send(String(draft.chatId),{...draft.body,notify:false});
    }
   }

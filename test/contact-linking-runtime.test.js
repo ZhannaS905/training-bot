@@ -15,17 +15,17 @@ function fixture(t){
 }
 test('unsafe configuration fails before network; owner file is unnecessary',async t=>{
  const f=fixture(t);
- for(const change of [{TEST_ADMIN_IDS:'81'},{TEST_ADMIN_IDS:'5819064,81'},{TEST_ALLOW_SEND:'true'},{FIREBASE_PROJECT_ID:'fitpp-crm'}])await a.rejects(prepare({...f,env:{...f.env,...change}}));
+ for(const change of [{TEST_ADMIN_IDS:'invalid'},{TEST_ALLOW_SEND:'true'},{FIREBASE_PROJECT_ID:'fitpp-crm'}])await a.rejects(prepare({...f,env:{...f.env,...change}}));
  a.equal(f.requests.length,0);
  const prepared=await prepare({...f,env:{...f.env,CONTACT_LINK_OWNER_FILE:'/missing',TEST_BOT_TOKEN:undefined,BOT_TOKEN:'fake-token',FITPP_DIRECT_ENABLED:'true',FITPP_DIRECT_WRITES_ENABLED:'true'}});await prepared.close();
 });
-test('runtime reads both test documents, replies only to allowed user, suppresses duplicate events',async t=>{
+test('runtime reads both test documents, replies to ordinary participants, suppresses duplicate events',async t=>{
  const f=fixture(t),s=await prepare(f);t.after(()=>s.close());
  a.deepEqual(f.paths,[MAIN,LINKS]);a.equal(f.writes,0);
  await s.receive({...f.start,user:{user_id:81,is_bot:false}});
- a.equal(f.requests.length,1);
+ a.equal(f.requests.length,2);
  await Promise.all([s.receive(f.start),s.receive(f.start)]);
- a.equal(f.requests.length,2);a.equal(new URL(f.requests[1].url).searchParams.get('chat_id'),'70');
+ a.equal(f.requests.length,3);a.equal(new URL(f.requests[2].url).searchParams.get('chat_id'),'70');
  a.equal(JSON.parse(f.requests[1].options.body).notify,false);
 });
 test('authenticated Firebase session commits contact registry, never main; identity loss blocks',async t=>{
@@ -59,4 +59,18 @@ test('combined runtime reuses Firebase capability and leaves shared session life
  const s=await prepare({...f,sdk:undefined,session});
  a.equal(inspected,1);a.equal(f.requests.length,1);
  await s.close();a.equal(closed,0);
+});
+
+test('ordinary non-admin activates, repeats without writes, and cannot claim another contact or binding',async t=>{
+ const f=fixture(t),s=await prepare({...f,env:{...f.env,TEST_ADMIN_IDS:''}});t.after(()=>s.close());
+ const start=(uid,cid)=>({...f.start,chat_id:cid,user:{user_id:uid,is_bot:false}});
+ const contact=(uid,cid,owner=uid)=>{
+  const vcf_info='BEGIN:VCARD\r\nTEL:79990000000\r\nEND:VCARD\r\n';
+  return {update_type:'message_created',timestamp:1000001,message:{timestamp:1000001,sender:{user_id:uid,is_bot:false},recipient:{chat_type:'dialog',chat_id:cid,user_id:90},body:{mid:`contact.${uid}.${f.requests.length}`,attachments:[{type:'contact',payload:{vcf_info,max_info:{user_id:owner},hash:createHmac('sha256','fake-token').update(vcf_info).digest('hex')}}]}}};
+ };
+ await s.receive(start(81,71));await s.receive(contact(81,71));
+ a.equal(f.writes,1);a.equal(f.registry.bindings[0].maxUserId,81);
+ await s.receive({...start(81,71),timestamp:1000001});await s.receive(contact(81,71));a.equal(f.writes,1);
+ await s.receive(start(82,72));await s.receive(contact(82,72,81));a.equal(f.writes,1);
+ await s.receive(contact(82,72));a.equal(f.writes,1);a.equal(f.registry.bindings[0].maxUserId,81);
 });

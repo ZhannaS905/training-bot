@@ -57,8 +57,16 @@ function firebaseStore({sdk,db,botId}){
    if(!binding)return clientId;
    if(clientId!==binding.clientId)return {status:'refused'};
    const existing=registry.bindings.filter(b=>b.clientId===clientId||b.maxUserId===binding.maxUserId||b.maxChatId===binding.maxChatId);
-   if(existing.length){const b=existing[0];return {status:existing.length===1&&b.clientId===clientId&&b.maxUserId===binding.maxUserId&&b.maxChatId===binding.maxChatId?'already_linked':'conflict'};}
-   const next=validateRegistry({...registry,bindings:[...registry.bindings,{...binding,notificationsEnabled:false}]},botId);
+   if(existing.length){
+    const b=existing[0];
+    if(existing.length!==1||b.clientId!==clientId||b.maxUserId!==binding.maxUserId||b.maxChatId!==binding.maxChatId)return {status:'conflict'};
+    if(b.notificationsEnabled!==true||b.recoverNotifications!==true){
+     const next=validateRegistry({...registry,bindings:registry.bindings.map(row=>row===b?{...row,notificationsEnabled:true,recoverNotifications:true}:row)},botId);
+     tx.set(links,next);
+    }
+    return {status:'already_linked'};
+   }
+   const next=validateRegistry({...registry,bindings:[...registry.bindings,{...binding,notificationsEnabled:true,recoverNotifications:true}]},botId);
    tx.set(links,next);
    return {status:'linked'};
   });}catch(error){
@@ -91,7 +99,7 @@ function contactLinking({botId,token,allowedUserIds=[],store,now=Date.now}){
   if(u.update_type==='bot_started'||m.body?.text==='/start'){
    const old=sessions.get(uid);if(old&&u.timestamp<old.at)return;
    sessions.set(uid,{chatId,at:u.timestamp,expires:now()+300000});
-   return draft(uid,chatId,'Здравствуйте! Это Training Test. Поделитесь своим номером для поиска тестового клиента FitPP. Уведомления пока выключены.',
+   return draft(uid,chatId,'Здравствуйте! Это Training Test. Поделитесь своим номером для поиска тестового клиента FitPP. После подтверждения будут включены уведомления об абонементе и посещениях, включая пропущенные.',
     [[{type:'request_contact',text:'📱 Поделиться номером телефона'}]]);
   }
   const s=sessions.get(uid);
@@ -107,7 +115,7 @@ function contactLinking({botId,token,allowedUserIds=[],store,now=Date.now}){
   const result=await store.bind(number,{clientId,maxUserId:uid,maxChatId:chatId});
   sessions.delete(uid);
   return draft(uid,chatId,['linked','already_linked'].includes(result.status)?
-   'Тестовая привязка сохранена. Отправка уведомлений остаётся выключенной.':
+   'Привязка сохранена. Уведомления об абонементе и посещениях включены; пропущенные будут проверены и отправлены.':
    'Привязка не выполнена. Обратитесь к администратору теста.');
  }
  return {receive(u){const next=tail.then(()=>receive(u));tail=next.catch(()=>{});return next;}};

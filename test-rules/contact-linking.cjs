@@ -1,0 +1,41 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),a=require('node:assert/strict');
+const {initializeTestEnvironment,assertSucceeds,assertFails}=require('@firebase/rules-unit-testing');
+const {doc,setDoc,getDoc,deleteDoc}=require('firebase/firestore');
+const uid='lLlMAetSG1aEeJSeBl4F4ypydEh2',projectId='demo-fitpp-notifications';
+const rules=fs.readFileSync(path.join(__dirname,'../docs/CONTACT-LINKING.full-proposed.rules'),'utf8');
+(async()=>{
+ const env=await initializeTestEnvironment({projectId,firestore:{host:'127.0.0.1',port:8857,rules}});
+ await env.clearFirestore();
+ let checked=0;const yes=async p=>{await assertSucceeds(p);checked++},no=async p=>{await assertFails(p);checked++};
+ try{
+  const name='fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test';
+  const row=n=>({clientId:'demo-client-'+n,maxUserId:80+n,maxChatId:70+n,notificationsEnabled:true,recoverNotifications:true});
+  const registry=rows=>({version:1,botId:131384398,bindings:rows});
+  const owner=env.authenticatedContext(uid).firestore(),ref=doc(owner,name);
+  await yes(setDoc(ref,registry([row(1)])));await yes(getDoc(ref));
+  await no(setDoc(doc(env.unauthenticatedContext().firestore(),name),registry([row(1),row(2)])));
+  await no(getDoc(doc(env.authenticatedContext('stranger').firestore(),name)));
+  await no(setDoc(ref,registry([{...row(1),maxUserId:999}])));
+  await no(setDoc(ref,registry([row(1),{...row(2),maxUserId:row(1).maxUserId}])));
+  await no(setDoc(ref,registry([row(1),{...row(2),maxChatId:row(1).maxChatId}])));
+  await no(setDoc(ref,registry([row(1),{...row(2),clientId:'real-client'}])));
+  await no(setDoc(ref,{...registry([row(1),row(2)]),botId:999}));
+  await no(setDoc(ref,registry([row(1),{...row(2),maxChatId:-123}])));
+  await yes(setDoc(ref,registry([row(1),row(2)])));
+  await no(setDoc(ref,registry([row(1)])));await no(deleteDoc(ref));
+  await no(setDoc(ref,registry([row(1),row(2),row(3),row(4)])));
+  await yes(setDoc(ref,registry([row(1),row(2),row(3)])));
+  await yes(setDoc(ref,registry([row(1),row(2),row(3),row(4)])));
+  await no(setDoc(ref,registry([row(2),row(1),row(3),row(4)])));
+  await env.withSecurityRulesDisabled(async context=>setDoc(doc(context.firestore(),name),registry([{...row(1),notificationsEnabled:false,recoverNotifications:false}])));
+  await yes(setDoc(ref,registry([row(1)])));
+  await no(setDoc(ref,registry([{...row(1),notificationsEnabled:false}])));
+  const legacy={clientId:'demo-client-1',maxUserId:81,maxChatId:71,notificationsEnabled:true};
+  await env.withSecurityRulesDisabled(async context=>setDoc(doc(context.firestore(),name),registry([legacy])));
+  await yes(setDoc(ref,registry([legacy,row(2)])));
+  await yes(setDoc(ref,registry([row(1),row(2)])));
+  await no(setDoc(ref,registry([row(1),row(2),{...row(3),clientId:'demo-client-2'}])));
+  a.equal(checked,22);console.log('RULES_CHECKS_PASSED '+checked+' cloud_writes=0');
+ }finally{await env.cleanup()}
+})().catch(error=>{console.error(error);process.exitCode=1});

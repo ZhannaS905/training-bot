@@ -72,7 +72,7 @@ function createReceiptSession({directory}={}){
   const result=[];
   for(const [id,r]of entries){
    if(seen.has(id))continue;seen.add(id);
-   if(!valid(r,id)||r.event.clientId!=='demo-client-1')continue;
+   if(!valid(r,id)||!/^demo-client-[1-4]$/.test(r.event.clientId))continue;
    const item={...r.event,kind:kindOf(r),requestId:id,receipt:JSON.stringify(r)};
    if(current(item,state,binding))result.push(item);
   }

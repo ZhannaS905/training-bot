@@ -32,7 +32,7 @@ test('authenticated Firebase session commits contact registry, never main; ident
  const f=fixture(t),s=await prepare(f);t.after(()=>s.close());await s.receive(f.start);
  const vcf_info='BEGIN:VCARD\r\nTEL:79990000000\r\nEND:VCARD\r\n';
  await s.receive({update_type:'message_created',timestamp:1000000,message:{timestamp:1000000,sender:{user_id:5819064,is_bot:false},recipient:{chat_type:'dialog',chat_id:70,user_id:90},body:{mid:'contact.1',attachments:[{type:'contact',payload:{vcf_info,max_info:{user_id:5819064},hash:createHmac('sha256','fake-token').update(vcf_info).digest('hex')}}]}}});
- a.equal(f.writes,1);a.equal(f.registry.bindings[0].notificationsEnabled,false);
+ a.equal(f.writes,1);a.equal(f.registry.bindings[0].notificationsEnabled,true);
  a.equal(JSON.stringify(f.registry).includes('79990000000'),false);
  a.equal(JSON.parse(f.requests[2].options.body).attachments.length,0);
  f.auth.currentUser=null;await s.receive({...f.start,timestamp:1000001});

@@ -19,7 +19,7 @@ test('start -> signed contact -> immediate binding and private confirmation; ide
  a.equal(welcome.body.attachments[0].payload.buttons[0][0].type,'request_contact');
  const reply=await f.service.receive(f.contact());a.equal(f.writes,1);
  a.equal(reply.body.attachments.length,0);a.equal(JSON.stringify(reply).includes('79990000000'),false);
- a.deepEqual(f.registry.bindings,[{clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:false}]);
+ a.deepEqual(f.registry.bindings,[{clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true,recoverNotifications:true}]);
  await f.service.receive(f.contact());a.equal(f.writes,1);
  await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,1);
  a.deepEqual(f.paths,[MAIN,LINKS]);
@@ -82,7 +82,7 @@ test('additional unrelated cards do not block startup or demo linking; foreign p
 
 test('approved notification binding survives startup, repeat activation and new participant linking unchanged',async()=>{
  const f=setup([{id:'demo-client-1',phone:'79990000000'},{id:'demo-client-2',phone:'79990000001'}]);
- const approved={clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true};
+ const approved={clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true,recoverNotifications:true};
  f.setRegistry({version:1,botId:90,bindings:[approved]});
  await f.store.inspect();a.equal(f.writes,0);
  await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,0);
@@ -90,11 +90,19 @@ test('approved notification binding survives startup, repeat activation and new 
  a.equal((await f.store.bind('79990000000',{clientId:'demo-client-1',maxUserId:81,maxChatId:71})).status,'conflict');
  a.equal(f.writes,0);
  a.equal((await f.store.bind('79990000001',{clientId:'demo-client-2',maxUserId:81,maxChatId:71})).status,'linked');
- a.deepEqual(f.registry.bindings,[approved,{clientId:'demo-client-2',maxUserId:81,maxChatId:71,notificationsEnabled:false}]);
+ a.deepEqual(f.registry.bindings,[approved,{clientId:'demo-client-2',maxUserId:81,maxChatId:71,notificationsEnabled:true,recoverNotifications:true}]);
 });
 test('notification compatibility still rejects malformed flags, foreign bot, duplicate users and foreign cards',async()=>{
  for(const mutate of [r=>r.bindings[0].notificationsEnabled='true',r=>delete r.bindings[0].notificationsEnabled,r=>r.botId=91,r=>r.bindings.push({...r.bindings[0],clientId:'demo-client-2'}),r=>r.bindings[0].clientId='foreign-card']){
   const f=setup(),r={version:1,botId:90,bindings:[{clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true}]};
   mutate(r);f.setRegistry(r);await a.rejects(f.store.inspect(),/STORAGE_REFUSED/);a.equal(f.writes,0);
  }
+});
+
+
+test('verified repeat upgrades a legacy disabled own binding, never a conflicting binding',async()=>{
+ const f=setup();f.setRegistry({version:1,botId:90,bindings:[{clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:false}]});
+ await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,1);
+ a.equal(f.registry.bindings[0].notificationsEnabled,true);a.equal(f.registry.bindings[0].recoverNotifications,true);
+ await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,1);
 });

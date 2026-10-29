@@ -12,13 +12,13 @@ function expiryTime(date) {
   // Europe/Moscow is UTC+03:00. Next calendar day at 10:00 = +31h UTC.
   return midnight + 31 * 3600000;
 }
-function subscriptions(state) {
+function subscriptions(state,clientId=CLIENT) {
   validateState(state);
   const result = new Map(), ids = new Set();
   for (const client of state.clients) for (const sub of client.subscriptions || []) {
     if (typeof sub.id !== 'string' || !sub.id || ids.has(sub.id)) throw Error('SUBSCRIPTION_ID_REFUSED');
     ids.add(sub.id);
-    if (client.id !== CLIENT || client.archivedAt || sub.cancelledAt) continue;
+    if (client.id !== clientId || client.archivedAt || sub.cancelledAt) continue;
     if (!Number.isSafeInteger(sub.left) || sub.left < 0 || !Number.isFinite(expiryTime(sub.expires))) continue;
     try { frozenOn(sub,sub.expires); } catch {continue;}
     result.set(sub.id, structuredClone(sub));
@@ -27,12 +27,12 @@ function subscriptions(state) {
 }
 // caller must durably reserve eventKey before any attempted send. Baseline and gaps
 // consume deadlines without candidates. Never use this engine to replay history.
-function createExpirySession() {
+function createExpirySession({clientId=CLIENT}={}) {
   let previous, previousTime;
   const cycles = new Map(), consumed = new Set(), highWater = new Map();
   return {check(state, binding, now) {
     if (!Number.isSafeInteger(now)) throw Error('CLOCK_REFUSED');
-    const current = subscriptions(state), candidates = [];
+    const current = subscriptions(state,clientId), candidates = [];
     const continuous = previous && now > previousTime && now - previousTime <= MAX_GAP;
     for (const [id, sub] of current) {
       const before = previous?.get(id);
@@ -44,15 +44,15 @@ function createExpirySession() {
       // Deletion/reappearance cannot create one; consumed events stay consumed.
       if (before && sub.expires > before.expires && now < expiryTime(sub.expires)) cycle++;
       cycles.set(id, cycle);
-      const key = JSON.stringify(['expiry-v1',CLIENT,id,cycle,sub.expires]);
+      const key = JSON.stringify(['expiry-v1',clientId,id,cycle,sub.expires]);
       const due = expiryTime(sub.expires);
       if (now < due) continue;
       if (consumed.has(key)) continue;
       consumed.add(key);
       if (!continuous || !before || before.expires !== sub.expires || previousTime >= due || sub.left === 0 ||
-          !validBinding(binding,CLIENT)) continue;
-      candidates.push({kind:'expiry',clientId:CLIENT,subscriptionId:id,expires:sub.expires,
-        remaining:sub.left,eventKey:key,maxChatId:binding.bindings.find(b=>b.clientId===CLIENT).maxChatId});
+          !validBinding(binding,clientId)) continue;
+      candidates.push({kind:'expiry',clientId,subscriptionId:id,expires:sub.expires,
+        remaining:sub.left,eventKey:key,maxChatId:binding.bindings.find(b=>b.clientId===clientId).maxChatId});
     }
     previous = current; previousTime = now;
     return candidates;
@@ -71,8 +71,8 @@ function formatExpiry({expires,remaining}) {
   return `⏳ Срок абонемента истёк\n\n📅 Действовал до: ${displayDate(expires)}\nОсталось неиспользованных занятий: ${remaining}\n\n🫶 Ждём на следующей тренировке!`;
 }
 function stillCurrent(item,state,binding) {
-  const sub=subscriptions(state).get(item.subscriptionId);
-  return validBinding(binding,CLIENT) && !!sub && sub.expires===item.expires &&
+  const sub=subscriptions(state,item.clientId).get(item.subscriptionId);
+  return validBinding(binding,item.clientId) && !!sub && sub.expires===item.expires &&
     sub.left===item.remaining && sub.left>0;
 }
 module.exports = {stillCurrent,expiryTime,createExpirySession,formatPurchase,formatExpiry,MAX_GAP};

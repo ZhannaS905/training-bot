@@ -19,11 +19,15 @@ function settings(env) {
 }
 async function verify(raw, binding, clientId) {
   if (clientId === undefined) {
-    return verify(raw,binding,'demo-client-1');
+    if(!binding||binding.version!==1||binding.botId!==Number(BOT)||!Array.isArray(binding.bindings)||
+       binding.bindings.some(row=>row.notificationsEnabled&&(!/^demo-client-[1-4]$/.test(row.clientId)||!validBinding(binding,row.clientId))))throw Error('NOTIFICATION_BINDING_REFUSED');
+    const enabled=binding.bindings.filter(row=>row.notificationsEnabled);
+    if(!enabled.length&&!identityAccepted(checkTestBotIdentity(await raw.request('GET','/me'),BOT)))throw Error('NOTIFICATION_IDENTITY_REFUSED');
+    for(const row of enabled)await verify(raw,binding,row.clientId);
+    return;
   }
-  if (!validBinding(binding,clientId) || clientId !== 'demo-client-1' ||
-      binding.bindings.some(row => row.notificationsEnabled &&
-        (row.clientId !== 'demo-client-1' || row.maxChatId !== 126619382 || row.maxUserId !== 5819064))) throw Error('NOTIFICATION_BINDING_REFUSED');
+  if (!validBinding(binding,clientId) || !/^demo-client-[1-4]$/.test(clientId) ||
+      binding.bindings.some(row => row.notificationsEnabled && !/^demo-client-[1-4]$/.test(row.clientId))) throw Error('NOTIFICATION_BINDING_REFUSED');
   if (!identityAccepted(checkTestBotIdentity(await raw.request('GET','/me'),BOT))) throw Error('NOTIFICATION_IDENTITY_REFUSED');
   const {maxChatId: CHAT, maxUserId: USER} = binding.bindings.find(row => row.clientId === clientId);
   const chat = await raw.request('GET','/chats/' + CHAT);
@@ -75,7 +79,7 @@ function createExpirySender({env,directory,raw}) {
   const token=settings(env); raw ||= new MaxApi(token);
   const {expiryTime,formatExpiry}=require('./fitpp-subscription-notifications.cjs');
   return {async send(item,binding,now=Date.now()) {
-    if(item?.kind!=='expiry' || item.clientId!=='demo-client-1' ||
+    if(item?.kind!=='expiry' || !/^demo-client-[1-4]$/.test(item.clientId) ||
        typeof item.subscriptionId!=='string' || !item.subscriptionId ||
        !validBinding(binding,item.clientId) ||
        item.maxChatId!==binding.bindings.find(b=>b.clientId===item.clientId).maxChatId ||

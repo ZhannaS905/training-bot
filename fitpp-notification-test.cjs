@@ -32,7 +32,7 @@ async function main(env=process.env,args=process.argv.slice(2),{
   }
   const sender=createSender({env,directory}), session=createPreviewSession();
   const expiryEnabled=env.FITPP_NOTIFICATION_EXPIRY_ENABLED==='true';
-  const expirySession=require('./src/fitpp-subscription-notifications.cjs').createExpirySession();
+  const expirySessions=Array.from({length:4},(_,i)=>require('./src/fitpp-subscription-notifications.cjs').createExpirySession({clientId:'demo-client-'+(i+1)}));
   const expirySender=require('./src/fitpp-notification-send.cjs').createExpirySender({env,directory});
   const receipts=require('./src/fitpp-receipt-notifications.cjs');
   const receiptSession=receipts.createReceiptSession(live&&env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?{directory}:{}), receiptSender=receipts.createReceiptSender({env,directory});
@@ -43,14 +43,17 @@ async function main(env=process.env,args=process.argv.slice(2),{
     await sender.verify(binding);
     if(mode==='--verify'){console.log('FITPP_NOTIFICATION_VERIFIED no_send no_firestore_write');return}
     const {baseline,candidates}=session.check(state,binding);
-    for(const item of (env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?receiptSession.check(state,binding):[])){
+    const receiptCandidates=env.FITPP_NOTIFICATION_RECEIPTS_ENABLED==='true'?receiptSession.check(state,binding):[];
+    if(live)for(const result of await require('./src/fitpp-notification-recovery.cjs').recover({state,binding,env,directory,readFresh:()=>readBoth(token)}))
+      console.log('FITPP_RECOVERY_RESULT '+result);
+    for(const item of receiptCandidates){
       const fresh=await readBoth(token);
       if(receipts.current(item,fresh.main,fresh.binding)){
         if(!live)console.log('FITPP_RECEIPT_PREVIEW '+JSON.stringify(receipts.format(item)));
         console.log('FITPP_RECEIPT_RESULT '+(live?await receiptSender.send(item,fresh.main,fresh.binding):'dry-run'));
       }
     }
-    if(expiryEnabled)for(const item of expirySession.check(state,binding,Date.now())) {
+    if(expiryEnabled)for(const item of expirySessions.flatMap(session=>session.check(state,binding,Date.now()))) {
       // Refresh immediately before attempting: extension/cancellation/balance may change.
       const fresh=await readBoth(token);
       if(require('./src/fitpp-subscription-notifications.cjs').stillCurrent(item,fresh.main,fresh.binding))

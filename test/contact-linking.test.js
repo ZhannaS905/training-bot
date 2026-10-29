@@ -78,3 +78,23 @@ test('additional unrelated cards do not block startup or demo linking; foreign p
  const r=setup([{id:'demo-client-1',phone:'79990000000',archivedAt:1}]);
  a.equal(await r.store.find('79990000000'),null);
 });
+
+
+test('approved notification binding survives startup, repeat activation and new participant linking unchanged',async()=>{
+ const f=setup([{id:'demo-client-1',phone:'79990000000'},{id:'demo-client-2',phone:'79990000001'}]);
+ const approved={clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true};
+ f.setRegistry({version:1,botId:90,bindings:[approved]});
+ await f.store.inspect();a.equal(f.writes,0);
+ await f.service.receive(f.start);await f.service.receive(f.contact());a.equal(f.writes,0);
+ a.deepEqual(f.registry.bindings,[approved]);
+ a.equal((await f.store.bind('79990000000',{clientId:'demo-client-1',maxUserId:81,maxChatId:71})).status,'conflict');
+ a.equal(f.writes,0);
+ a.equal((await f.store.bind('79990000001',{clientId:'demo-client-2',maxUserId:81,maxChatId:71})).status,'linked');
+ a.deepEqual(f.registry.bindings,[approved,{clientId:'demo-client-2',maxUserId:81,maxChatId:71,notificationsEnabled:false}]);
+});
+test('notification compatibility still rejects malformed flags, foreign bot, duplicate users and foreign cards',async()=>{
+ for(const mutate of [r=>r.bindings[0].notificationsEnabled='true',r=>delete r.bindings[0].notificationsEnabled,r=>r.botId=91,r=>r.bindings.push({...r.bindings[0],clientId:'demo-client-2'}),r=>r.bindings[0].clientId='foreign-card']){
+  const f=setup(),r={version:1,botId:90,bindings:[{clientId:'demo-client-1',maxUserId:80,maxChatId:70,notificationsEnabled:true}]};
+  mutate(r);f.setRegistry(r);await a.rejects(f.store.inspect(),/STORAGE_REFUSED/);a.equal(f.writes,0);
+ }
+});

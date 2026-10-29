@@ -38,7 +38,7 @@ function validateRegistry(value,botId){
  if(value?.version!==1||value.botId!==botId||!Array.isArray(value.bindings))throw Error('BINDING_STATE_REFUSED');
  const users=new Set(),clients=new Set(),chats=new Set();
  for(const b of value.bindings){
-  if(!client(b.clientId)||!positive(b.maxUserId)||!chat(b.maxChatId)||b.notificationsEnabled!==false||
+  if(!client(b.clientId)||!positive(b.maxUserId)||!chat(b.maxChatId)||typeof b.notificationsEnabled!=='boolean'||
      users.has(b.maxUserId)||clients.has(b.clientId)||chats.has(b.maxChatId))throw Error('BINDING_STATE_REFUSED');
   users.add(b.maxUserId);clients.add(b.clientId);chats.add(b.maxChatId);
  }

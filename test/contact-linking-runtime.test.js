@@ -74,3 +74,16 @@ test('ordinary non-admin activates, repeats without writes, and cannot claim ano
  await s.receive(start(82,72));await s.receive(contact(82,72,81));a.equal(f.writes,1);
  await s.receive(contact(82,72));a.equal(f.writes,1);a.equal(f.registry.bindings[0].maxUserId,81);
 });
+
+test('contact preflight preserves safe storage diagnosis through startup wrappers and cleanup errors',async()=>{
+ const {at,format}=require('../src/fitpp-direct-diagnostic');
+ for(const reason of ['permission-denied','unavailable','BINDING_STATE_REFUSED','TEST_STATE_MISSING']){
+  const f=fixture(),error=new Error(reason);
+  if(['permission-denied','unavailable'].includes(reason))error.code=reason;
+  f.sdk.runTransaction=async()=>{throw error};
+  try{await at('RUNTIME_PREPARE',()=>prepare(f));a.fail('must reject')}
+  catch(e){a.equal(format(e),`stage=CONTACT_STORAGE reason=${reason}`);a.equal(e.message,'CONTACT_LINK_STORAGE_REFUSED')}
+ }
+ const f=fixture(),session={contactStore:()=>({inspect:async()=>{throw Object.assign(new Error('private phone and token'),{code:'permission-denied'})}})};
+ await a.rejects(at('RUNTIME_PREPARE',()=>prepare({...f,session})),e=>format(e)==='stage=CONTACT_STORE reason=permission-denied');
+});

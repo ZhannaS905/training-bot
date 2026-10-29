@@ -25,7 +25,7 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
   await at('POLL_VIEW',()=>bridge.signedPost(s,'/bot/poll-view',{chat:s.scope.chat,mid:s.scope.mid,uuid:s.scope.uuid},{transport,now}));
   await at('POLL_TIME',checkTime);
   const contact=env.CONTACT_LINK_ENABLED==='true'
-   ?await require('./contact-linking-runtime').prepare({env,sdk,now,session}):null;
+   ?await at('CONTACT_CONFIG',()=>require('./contact-linking-runtime').prepare({env,sdk,now,session})):null;
   const dailyBooking=autopost?require('./fitpp-daily-booking').createDailyBooking({db:session.db,botId:env.TEST_EXPECTED_BOT_ID,now}):null;
   return {contact,dailyBooking,autopostStore:session.autopostStore,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
  } catch(error){await session.close();throw error}

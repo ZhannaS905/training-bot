@@ -61,7 +61,10 @@ function firebaseStore({sdk,db,botId}){
    const next=validateRegistry({...registry,bindings:[...registry.bindings,{...binding,notificationsEnabled:false}]},botId);
    tx.set(links,next);
    return {status:'linked'};
-  });}catch{throw Error('CONTACT_LINK_STORAGE_REFUSED');}
+  });}catch(error){
+   const safe=require('./fitpp-direct-diagnostic').mark(error,'CONTACT_STORAGE');
+   safe.message='CONTACT_LINK_STORAGE_REFUSED';throw safe;
+  }
  }
  return {inspect:async()=>{await operate(null);},find:number=>operate(number),bind:(number,binding)=>operate(number,binding)};
 }

@@ -1,5 +1,6 @@
 'use strict';
 const {MaxApi}=require('./api');
+const {at,mark}=require('./fitpp-direct-diagnostic');
 const {config}=require('./memory-training-test');
 const {checkTestBotIdentity,identityAccepted}=require('./test-bot-identity');
 const {contactLinking}=require('./contact-linking');
@@ -15,13 +16,16 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now,session
  const sessionEnv={...env,FITPP_DIRECT_ENABLED:'true',FITPP_DIRECT_WRITES_ENABLED:'false'};
  sessionModule.settings(sessionEnv);
  const raw=new MaxApi(c.token,fetchImpl);
- const identity=await raw.request('GET','/me');
- if(!identityAccepted(checkTestBotIdentity(identity,c.expectedId)))throw Error('TEST_IDENTITY_REFUSED');
- const session=sharedSession||await sessionModule.connect({env:sessionEnv,sdk});
+ const identity=await at('CONTACT_MAX_IDENTITY',async()=>{
+  const value=await raw.request('GET','/me');
+  if(!identityAccepted(checkTestBotIdentity(value,c.expectedId)))throw Error('TEST_IDENTITY_REFUSED');
+  return value;
+ });
+ const session=sharedSession||await at('CONTACT_CONNECT',()=>sessionModule.connect({env:sessionEnv,sdk}));
  const close=sharedSession?async()=>{}:session.close;
  try{
   const store=session.contactStore(identity.user_id,{writeEnabled:()=>env.CONTACT_LINK_WRITES_ENABLED==='true'});
-  await store.inspect(); // Read-only transaction: main + registry, no phone output.
+  await at('CONTACT_STORE',()=>store.inspect()); // Read-only transaction: main + registry, no phone output.
   const handler=contactLinking({botId:identity.user_id,token:c.token,store,now});
   const seen=new Set();let tail=Promise.resolve();
   async function receive(u){
@@ -41,7 +45,7 @@ async function prepare({env=process.env,sdk,fetchImpl=fetch,now=Date.now,session
    }
   }
   return {secret:env.WEBHOOK_SECRET,close,receive(u){const next=tail.then(()=>receive(u));tail=next.catch(()=>{});return next;}};
- }catch{await close();throw Error('CONTACT_PREFLIGHT_REFUSED')}
+ }catch(error){try{await close()}catch{}throw mark(error,'CONTACT_STORE')}
 }
 async function main(options={}){
  const prepared=await prepare(options);

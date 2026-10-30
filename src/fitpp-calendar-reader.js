@@ -49,4 +49,13 @@ function groupCalendarDay(schedule,date){
  return result;
 }
 
-module.exports={calendarDay,groupCalendarDay,createCalendar,validDate};
+function createGroupCalendar({store}){
+ if(!store||typeof store.read!=='function')throw Error('GROUP_CALENDAR_STORE_REQUIRED');
+ return {async day(date){
+  if(!validDate(date))throw Error('CALENDAR_DATE_REFUSED');
+  // Always fetch fresh state. Missing or inaccessible calendar fails closed.
+  const schedule=await store.read();
+  return groupCalendarDay(schedule,date);
+ }};
+}
+module.exports={calendarDay,groupCalendarDay,createCalendar,createGroupCalendar,validDate};

@@ -33,29 +33,56 @@ function createCalendar({db}){
 
 // The live 8846 group calendar is stored in trainers/{ownerUid}.groupScheduleV1,
 // not in states/main. Do not treat missing group periods as recurring sessions.
-function groupCalendarDay(schedule,date){
+function groupCalendarDay(schedule,date,main){
  if(!validDate(date))throw Error('CALENDAR_DATE_REFUSED');
- if(!schedule||schedule.schemaVersion!==1||schedule.projectId!=='fitpp-test'||!Array.isArray(schedule.workouts)||!Array.isArray(schedule.groups)||!Array.isArray(schedule.periods))throw Error('GROUP_CALENDAR_REFUSED');
+ if(!schedule||schedule.schemaVersion!==1||schedule.projectId!=='fitpp-test'||!Array.isArray(schedule.workouts)||!Array.isArray(schedule.groups)||!Array.isArray(schedule.periods)||!Array.isArray(schedule.links))throw Error('GROUP_CALENDAR_REFUSED');
  const groups=new Map(schedule.groups.map(g=>[g.id,g]));
- const result=[];
+ if(groups.size!==schedule.groups.length)throw Error('GROUP_CALENDAR_REFUSED');
+ const periods=new Map(schedule.periods.map(p=>[p.id,p]));
+ if(periods.size!==schedule.periods.length)throw Error('GROUP_CALENDAR_REFUSED');
+ const result=[],seen=new Set();
+ function add(w,groupId){
+  if(!w||!validDate(w.date)||typeof w.id!=='string'||!w.id||!TIME.test(w.time)||typeof w.cancelled!=='boolean')throw Error('GROUP_WORKOUT_REFUSED');
+  if(w.cancelled||w.date!==date)return;
+  const g=groups.get(groupId);
+  if(!g||g.location!==w.location||seen.has(w.id))throw Error('GROUP_WORKOUT_REFUSED');
+  seen.add(w.id);result.push({id:w.id,date,location:w.location,time:w.time,groupId:g.id});
+ }
  for(const w of schedule.workouts){
-  if(w.date!==date||w.cancelled===true)continue;
-  const group=groups.get(w.groupId||w.location);
-  if(!group||group.location!==w.location||!TIME.test(w.time)||typeof w.id!=='string'||!w.id||typeof w.periodId!=='string'||!schedule.periods.some(p=>p.id===w.periodId&&p.group===group.id))throw Error('GROUP_WORKOUT_REFUSED');
-  result.push({id:w.id,date,location:w.location,time:w.time,groupId:group.id});
+  const p=periods.get(w.periodId);
+  if(!p||p.group!==w.groupId||w.groupId!==w.location)throw Error('GROUP_WORKOUT_REFUSED');
+  add(w,w.groupId);
+ }
+ // Links are persisted calendar sessions pointing to pre-existing journal workouts.
+ // A moved linked workout is resolved by its current date, not scheduledDate.
+ if(schedule.links.length){
+  if(!main||!main.workouts||typeof main.workouts!=='object')throw Error('GROUP_CALENDAR_MAIN_REQUIRED');
+  for(const link of schedule.links){
+   const p=periods.get(link.periodId);
+   if(!p||p.group!==link.groupId&&link.groupId!==undefined||!['main','trainers'].includes(link.source))throw Error('GROUP_CALENDAR_LINK_REFUSED');
+   if(link.source!=='main')throw Error('GROUP_CALENDAR_TRAINER_LINK_UNSUPPORTED');
+   const w=main.workouts[link.workoutId];
+   if(!w||w.id!==link.workoutId)throw Error('GROUP_CALENDAR_LINK_MISSING');
+   add(w,p.group);
+  }
  }
  result.sort((a,b)=>a.time.localeCompare(b.time)||a.location.localeCompare(b.location)||a.id.localeCompare(b.id));
- if(new Set(result.map(w=>w.id)).size!==result.length)throw Error('GROUP_WORKOUT_DUPLICATE');
  return result;
 }
-
-function createGroupCalendar({store}){
+function createGroupCalendar({store,mainDb}){
  if(!store||typeof store.read!=='function')throw Error('GROUP_CALENDAR_STORE_REQUIRED');
  return {async day(date){
   if(!validDate(date))throw Error('CALENDAR_DATE_REFUSED');
-  // Always fetch fresh state. Missing or inaccessible calendar fails closed.
   const schedule=await store.read();
-  return groupCalendarDay(schedule,date);
+  let main;
+  if(schedule?.links?.length){
+   if(!mainDb||typeof mainDb.doc!=='function')throw Error('GROUP_CALENDAR_MAIN_REQUIRED');
+   const snap=await mainDb.doc(MAIN).get();
+   if(!snap.exists)throw Error('GROUP_CALENDAR_MAIN_REQUIRED');
+   main=snap.data();
+  }
+  return groupCalendarDay(schedule,date,main);
  }};
 }
+
 module.exports={calendarDay,groupCalendarDay,createCalendar,createGroupCalendar,validDate};

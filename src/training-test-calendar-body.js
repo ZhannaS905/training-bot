@@ -11,8 +11,8 @@ function calendarPollBody(p){
  const details=w.location==='online'?'🎥 Платформа: '+place+'\n🔗 <a href="'+LINK+'">Ссылка для подключения</a>':'📍 Место: '+place;
  const names=p.order.map((uid,i)=>(i+1)+'. '+escape(p.votes[uid]));
  const participants=names.length?'✅ Записано ('+names.length+'):\n'+names.join('\n'):'🤨 Пока никто не записался!';
- return {text:'📅 <b>'+date+'</b>\n\n'+details+'\n⏰ Время: <b>'+escape(w.time)+' (МСК)</b>\n\n'+participants,format:'html',
-  attachments:[{type:'inline_keyboard',payload:{buttons:[[
+ return {text:(p.cancelled?'❌ <b>Тренировка отменена</b>\n\n':'')+'📅 <b>'+date+'</b>\n\n'+details+'\n⏰ Время: <b>'+escape(w.time)+' (МСК)</b>\n\n'+participants+(p.cancelled?'\n\n🔐 Опрос: '+escape(p.id):''),format:'html',
+  attachments:p.cancelled?[]:[{type:'inline_keyboard',payload:{buttons:[[
    {type:'callback',text:'✅ Приду',payload:payload(p,'yes')},
    {type:'callback',text:'↩️ Отменить',payload:payload(p,'cancel')}
   ]]}}]};

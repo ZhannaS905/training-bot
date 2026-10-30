@@ -33,3 +33,62 @@ test('linked original session follows moved journal workout and cancellation',()
  assert.deepEqual(groupCalendarDay(schedule,'2026-11-03',main),[]);
  assert.throws(()=>groupCalendarDay(schedule,'2026-11-03'),/GROUP_CALENDAR_MAIN_REQUIRED/);
 });
+
+test('trainer-linked workout follows a move and cancellation',()=>{
+ const schedule={
+  schemaVersion:1,
+  projectId:'fitpp-test',
+  groups:[{id:'zarya',location:'zarya'}],
+  periods:[{id:'p1',group:'zarya'}],
+  workouts:[],
+  links:[{
+   periodId:'p1',
+   scheduledDate:'2026-11-02',
+   slotTime:'20:00',
+   source:'trainers',
+   workoutId:'trainer-original'
+  }]
+ };
+ const trainerWorkouts={
+  'trainer-original':{
+   id:'trainer-original',
+   location:'zarya',
+   date:'2026-11-03',
+   time:'19:00',
+   cancelled:false
+  }
+ };
+
+ assert.deepEqual(
+  groupCalendarDay(schedule,'2026-11-02',undefined,trainerWorkouts),
+  []
+ );
+
+ assert.deepEqual(
+  groupCalendarDay(schedule,'2026-11-03',undefined,trainerWorkouts),
+  [{
+   id:'trainer-original',
+   date:'2026-11-03',
+   location:'zarya',
+   time:'19:00',
+   groupId:'zarya'
+  }]
+ );
+
+ trainerWorkouts['trainer-original'].cancelled=true;
+
+ assert.deepEqual(
+  groupCalendarDay(schedule,'2026-11-03',undefined,trainerWorkouts),
+  []
+ );
+
+ assert.throws(
+  ()=>groupCalendarDay(schedule,'2026-11-03'),
+  /TRAINER_WORKOUTS_MISSING/
+ );
+
+ assert.throws(
+  ()=>groupCalendarDay(schedule,'2026-11-03',undefined,{}),
+  /GROUP_CALENDAR_LINK_MISSING/
+ );
+});

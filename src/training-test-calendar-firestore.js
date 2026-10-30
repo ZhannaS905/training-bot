@@ -13,7 +13,7 @@ function validate(p,botId,key){
  if(!p||p.version!==1||p.botId!==botId||p.chat!==CHAT||p.key!==key||!KEY.test(key)||!UUID.test(p.id)||
  !['reserved','published','uncertain'].includes(p.status)||!p.workout||workoutKey(p.workout)!==key||
  !Number.isSafeInteger(p.createdAt)||!Number.isSafeInteger(p.revision)||!Number.isSafeInteger(p.displayedRevision)||
- p.displayedRevision<0||p.displayedRevision>p.revision||!p.votes||Array.isArray(p.votes)||
+ (p.lastEventUid!==undefined&&p.lastEventUid!==null&&(typeof p.lastEventUid!=='string'||!/^[1-9]\d*$/.test(p.lastEventUid)))||p.displayedRevision<0||p.displayedRevision>p.revision||!p.votes||Array.isArray(p.votes)||
  !p.last||Array.isArray(p.last)||!Array.isArray(p.order)||new Set(p.order).size!==p.order.length||
  p.order.length!==Object.keys(p.votes).length||p.order.some(uid=>!/^[1-9]\d*$/.test(uid)||typeof p.votes[uid]!=='string'||p.votes[uid].length>100)||
  Object.entries(p.last).some(([uid,at])=>!/^[1-9]\d*$/.test(uid)||!Number.isSafeInteger(at))||
@@ -36,12 +36,20 @@ function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>fa
  }
  return {
   async read(key){await validateAuth();const snap=await sdk.getDocFromServer(ref(key));await validateAuth();return snap.exists()?validate(snap.data(),botId,key):null},
+  async listPublished(){
+   await validateAuth();
+   const collection=sdk.collection(raw,ROOT,botId,'polls');
+   const query=sdk.query(collection,sdk.where('status','==','published'));
+   const snap=await sdk.getDocsFromServer(query);
+   await validateAuth();
+   return snap.docs.map(doc=>validate(doc.data(),botId,doc.id));
+  },
   async reserve(workout,candidate){
    const key=workoutKey(workout);
    return tx(key,({p,set})=>{
     if(p)return false; // No automatic resend after an uncertain send.
     set({version:1,botId,chat:CHAT,key,id:candidate.id,createdAt:candidate.createdAt,workout:structuredClone(workout),
-     status:'reserved',mid:null,votes:{},last:{},order:[],revision:0,displayedRevision:0});return true;
+     status:'reserved',mid:null,votes:{},last:{},lastEventUid:null,order:[],revision:0,displayedRevision:0});return true;
    });
   },
   async finish(key,id,mid){if(!MID.test(mid))throw Error('CALENDAR_POLL_MID_REFUSED');return tx(key,({p,set})=>{
@@ -58,14 +66,42 @@ function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>fa
     const receiptRef=sdk.doc(raw,prefix+key+'/events/'+hash(event.id));
     const receipt=await transaction.get(receiptRef),digest=hash(event);
     if(receipt.exists()){if(receipt.data().digest!==digest)throw Error('CALENDAR_POLL_EVENT_CONFLICT');return false}
-    if(p?.status!=='published'||p.id!==event.uuid||p.mid!==event.mid||event.at<=(p.last[event.uid]??-1))return false;
-    const next=structuredClone(p);next.last[event.uid]=event.at;
+    if(p?.status!=='published'||p.cancelled===true||p.id!==event.uuid||p.mid!==event.mid||event.at<=(p.last[event.uid]??-1))return false;
+    const next=structuredClone(p);next.last[event.uid]=event.at;next.lastEventUid=event.uid;
     if(event.action==='cancel'){delete next.votes[event.uid];next.order=next.order.filter(uid=>uid!==event.uid)}
     else{if(typeof event.name!=='string'||event.name.length>100)throw Error('CALENDAR_POLL_EVENT_REFUSED');
      if(!Object.hasOwn(next.votes,event.uid))next.order.push(event.uid);next.votes[event.uid]=event.name}
     if(Array.from(render(next).text).length>4000)return false;
     next.revision++;set(next);transaction.set(receiptRef,{digest,at:event.at});return true;
    });
+  },
+  async syncWorkout(key, workout) {
+    if (!workout || workoutKey(workout) !== key ||
+        typeof workout.cancelled !== 'boolean') {
+      throw Error('CALENDAR_WORKOUT_SYNC_REFUSED');
+    }
+
+    return tx(key, ({p, set}) => {
+      if (p?.status !== 'published') return false;
+
+      const changed =
+        p.workout.date !== workout.date ||
+        p.workout.time !== workout.time ||
+        p.workout.location !== workout.location ||
+        Boolean(p.cancelled) !== workout.cancelled;
+
+      if (!changed) return false;
+
+      const next = {
+        ...p,
+        workout: structuredClone(workout),
+        cancelled: workout.cancelled,
+        revision: p.revision + 1
+      };
+
+      set(next);
+      return true;
+    });
   },
   async claimEdit(key){const token=randomUUID();return tx(key,({p,set})=>{
    if(p?.status!=='published'||p.revision===p.displayedRevision||p.editLease?.until>now())return null;

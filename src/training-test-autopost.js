@@ -31,7 +31,148 @@ async function capability(c,{raw=new MaxApi(c.token)}={}){
   if(member.user_id!==Number(c.expectedId)||member.is_bot!==true)throw Error('AUTOPOST_MEMBERSHIP_REFUSED');
  }
  await verify();
- return {verify,async answer(id){if(typeof id!=='string'||!id.trim()||id.length>256)throw Error('CALLBACK_ID_REQUIRED');return raw.request('POST','/answers',{callback_id:id},{})},async send(p){
+ return {verify,async answer(id){if(typeof id!=='string'||!id.trim()||id.length>256)throw Error('CALLBACK_ID_REQUIRED');return raw.request('POST','/answers',{callback_id:id},{})},async editCalendar(p, {beforePut=async()=>{}}={}) {
+  if (p?.status !== 'published' ||
+      p.cancelled === true ||
+      !MID.test(p.mid) ||
+      !/^[a-f0-9]{64}$/.test(p.key) ||
+      !UUID.test(p.id)) {
+    throw Error('CALENDAR_EDIT_REFUSED');
+  }
+
+  await verify();
+
+  const existing = await raw.request(
+    'GET', '/messages/' + encodeURIComponent(p.mid)
+  );
+
+  const attachments = existing?.body?.attachments || [];
+  const keyboards = attachments.filter(a => a.type === 'inline_keyboard');
+  const buttons = keyboards.flatMap(a =>
+    (a.payload?.buttons || []).flat()
+  );
+
+  const expectedButtons =
+    attachments.length === 1 &&
+    keyboards.length === 1 &&
+    buttons.length === 2 &&
+    ['yes', 'cancel'].every(action =>
+      buttons.filter(b =>
+        b.type === 'callback' &&
+        b.payload === `cal:${p.key}:${p.id}:${action}`
+      ).length === 1
+    );
+
+  const restoring =
+    attachments.length === 0 &&
+    typeof existing?.body?.text === 'string' &&
+    existing.body.text.includes('Тренировка отменена') &&
+    existing.body.text.includes('🔐 Опрос: ' + p.id);
+
+  if (existing?.body?.mid !== p.mid ||
+      String(existing?.recipient?.chat_id) !== CHAT ||
+      existing?.sender?.user_id !== Number(c.expectedId) ||
+      existing?.sender?.is_bot !== true ||
+      (!expectedButtons && !restoring)) {
+    throw Error('CALENDAR_EDIT_SCOPE_REFUSED');
+  }
+
+  const {calendarPollBody} = require('./training-test-calendar-body');
+  const message = calendarPollBody(p);
+
+  await beforePut();
+
+  await raw.edit(p.mid, {
+    text: message.text,
+    format: message.format,
+    ...(restoring ? {attachments: message.attachments} : {}),
+    notify: false
+  });
+},
+async cancelCalendar(p, {beforePut=async()=>{}}={}) {
+  if (p?.status !== 'published' ||
+      p.cancelled !== true ||
+      !MID.test(p.mid) ||
+      !/^[a-f0-9]{64}$/.test(p.key) ||
+      !UUID.test(p.id)) {
+    throw Error('CALENDAR_CANCEL_REFUSED');
+  }
+
+  await verify();
+
+  const existing = await raw.request(
+    'GET', '/messages/' + encodeURIComponent(p.mid)
+  );
+
+  if (existing?.body?.mid !== p.mid ||
+      String(existing?.recipient?.chat_id) !== CHAT ||
+      existing?.sender?.user_id !== Number(c.expectedId) ||
+      existing?.sender?.is_bot !== true) {
+    throw Error('CALENDAR_CANCEL_SCOPE_REFUSED');
+  }
+
+  const attachments = existing?.body?.attachments || [];
+  const keyboards = attachments.filter(a => a.type === 'inline_keyboard');
+  const buttons = keyboards.flatMap(a =>
+    (a.payload?.buttons || []).flat()
+  );
+
+  const expectedButtons =
+    keyboards.length === 1 &&
+    buttons.length === 2 &&
+    ['yes', 'cancel'].every(action =>
+      buttons.filter(b =>
+        b.type === 'callback' &&
+        b.payload === `cal:${p.key}:${p.id}:${action}`
+      ).length === 1
+    );
+
+  const alreadyCancelled =
+    attachments.length === 0 &&
+    existing?.body?.text?.includes('Тренировка отменена') &&
+    existing.body.text.includes('🔐 Опрос: ' + p.id);
+
+  if (!expectedButtons && !alreadyCancelled) {
+    throw Error('CALENDAR_CANCEL_BUTTONS_REFUSED');
+  }
+
+  const {calendarPollBody} = require('./training-test-calendar-body');
+  const message = calendarPollBody(p);
+
+  await beforePut();
+
+  await raw.edit(p.mid, {
+    text: message.text,
+    format: message.format,
+    attachments: [],
+    notify: false
+  });
+},
+async sendCalendar(p, message){
+    if (!p?.key || !p?.id || !p?.workout) {
+      throw Error('CALENDAR_SEND_REFUSED');
+    }
+    if (!message?.text || message.format !== 'html' ||
+        !Array.isArray(message.attachments)) {
+      throw Error('CALENDAR_MESSAGE_REFUSED');
+    }
+    const buttons = message.attachments
+      .filter(a => a.type === 'inline_keyboard')
+      .flatMap(a => (a.payload?.buttons || []).flat());
+    if (buttons.length !== 2 ||
+        !['yes', 'cancel'].every(action =>
+          buttons.some(b =>
+            b.type === 'callback' &&
+            b.payload === `cal:${p.key}:${p.id}:${action}`
+          ))) {
+      throw Error('CALENDAR_BUTTONS_REFUSED');
+    }
+    await verify();
+    return raw.send(CHAT, message, {
+      disableLinkPreview: p.workout.location === 'online'
+    });
+  },
+  async send(p){
   await verify();return raw.send(CHAT,pollBody(p),{disableLinkPreview:[0,6].includes(new Date(p.date+'T12:00:00Z').getUTCDay())});
  },async edit(p,{beforePut=async()=>{}}={}){
   if(p.status!=='published'||!MID.test(p.mid))throw Error('AUTOPOST_EDIT_REFUSED');
@@ -43,10 +184,72 @@ async function capability(c,{raw=new MaxApi(c.token)}={}){
 }
 function pollBody(p){return body({...p,votes:new Map(p.order.map(uid=>[uid,p.votes[uid]]))})}
 class Autopost{
- constructor({store,api,booking,admins=[],now=()=>new Date(),log=console.error}){
-  Object.assign(this,{store,api,booking,admins,now,log});this.tail=Promise.resolve();this.stopped=false;this.startedAt=+now();this.lastTick=this.startedAt;
+ constructor({store,api,booking,calendar,calendarPollStore,calendarMode=false,admins=[],now=()=>new Date(),log=console.error}){
+  Object.assign(this,{store,api,booking,calendar,calendarPollStore,calendarMode,admins,now,log});this.calendarCallbacks = calendar && calendarPollStore
+      ? require('./training-test-calendar-callbacks').createCalendarCallbacks({
+          store: calendarPollStore,
+          calendar,
+          now: () => +this.now(),
+          render: require('./training-test-calendar-body').calendarPollBody
+        })
+      : null;
+    this.tail=Promise.resolve();this.stopped=false;this.startedAt=+now();this.lastTick=this.startedAt;
  }
  run(job){const next=this.tail.then(()=>{if(!this.stopped)return job()});this.tail=next.catch(()=>{});return next}
+ async publishCalendar(workout) {
+   if (!this.calendarPollStore || !this.calendar) return false;
+
+   const now = this.now();
+   const today = moscow(now).date;
+   if (workout.date !== today) return false;
+
+   const startsAt = Date.parse(
+     workout.date + 'T' + workout.time + ':00+03:00'
+   );
+   if (!Number.isFinite(startsAt) || +now >= startsAt) return false;
+
+   const {workoutKey} = require('./fitpp-calendar-poll-plan');
+   const key = workoutKey(workout);
+
+   await this.api.verify();
+
+   const candidate = {id: randomUUID(), createdAt: +now};
+   const reserved = await this.calendarPollStore.reserve(workout, candidate);
+   if (!reserved) return false;
+
+   const poll = await this.calendarPollStore.read(key);
+   if (poll?.id !== candidate.id || poll.status !== 'reserved') {
+     throw Error('CALENDAR_RESERVATION_REFUSED');
+   }
+
+   const {calendarPollBody} = require('./training-test-calendar-body');
+
+   try {
+     const mid = await this.api.sendCalendar(poll, calendarPollBody(poll));
+     await this.calendarPollStore.finish(key, poll.id, mid);
+     this.log('Training Test: calendar poll published.');
+     return true;
+   } catch {
+     await this.calendarPollStore.uncertain(key, poll.id);
+     this.log('Training Test: calendar publication uncertain; retry blocked.');
+     return false;
+   }
+ }
+
+ async calendarPlan() {
+   if (!this.calendar || !this.calendarPollStore) return [];
+   const now = this.now();
+   const today = moscow(now).date;
+   const workouts = await this.calendar.day(today);
+   const plan = require('./fitpp-calendar-poll-plan').planDay(workouts, now);
+    const byId = new Map(workouts.map(w => [w.id, w]));
+    return plan.map(item => {
+      const workout = byId.get(item.workoutId);
+      if (!workout) throw Error('CALENDAR_WORKOUT_NOT_FOUND');
+      return {...workout, publishDue: item.publishDue};
+    });
+ }
+
  async publish(date){
   const t=moscow(this.now());
   // Existing exact FitPP pilot remains untouched, including its duplicate guard.
@@ -63,7 +266,24 @@ class Autopost{
  }
  tick(){return this.run(async()=>{
   const now=this.now(),t=moscow(now),due=Date.parse(t.date+'T10:00:00+03:00'),previous=this.lastTick;this.lastTick=+now;
-  if(times[t.day]&&this.startedAt<=due&&previous<=due&&+now>=due&&+now<due+60000)await this.publish(t.date);
+  if (this.calendarMode) {
+    if (this.startedAt <= due && previous <= due &&
+        +now >= due && +now < due + 60000) {
+      const plan = await this.calendarPlan();
+      for (const workout of plan) {
+        if (workout.publishDue) {
+          await this.publishCalendar(workout);
+        }
+      }
+    }
+  } else if (times[t.day] && this.startedAt <= due &&
+             previous <= due && +now >= due && +now < due + 60000) {
+    await this.publish(t.date);
+  }
+  if (this.calendarMode) {
+    await this.refreshCalendarPolls();
+    return;
+  } // CALENDAR_REFRESH_TICK
   if(!times[t.day]||t.date===POLL.date||+this.now()>=closesAt(t.date))return;
   const p=await this.store.read(t.date);
   if(p?.status!=='published'||p.revision===p.displayedRevision)return;
@@ -77,7 +297,114 @@ class Autopost{
    await this.store.releaseEdit(t.date,token);
   }
  })}
+ async refreshCalendarPolls() {
+    if (!this.calendarMode || !this.calendar || !this.calendarPollStore) return;
+
+    const polls = await this.calendarPollStore.listPublished();
+
+    for (const poll of polls) {
+      const key = poll.key;
+
+      // Never interpret a missing workout as a cancellation.
+      const workout = await this.calendar.findById(poll.workout.id);
+      if (!workout) {
+        this.log('Training Test: calendar workout not found; poll unchanged.');
+        continue;
+      }
+
+      await this.calendarPollStore.syncWorkout(key, workout);
+
+      const current = await this.calendarPollStore.read(key);
+      if (!current || current.status !== 'published' ||
+          current.revision === current.displayedRevision) continue;
+
+      // Cancelled workouts must be updated even after their original start time.
+      if (!current.cancelled &&
+          +this.now() >= Date.parse(
+            current.workout.date + 'T' + current.workout.time + ':00+03:00'
+          ) + 3600000) continue;
+
+      const claimed = await this.calendarPollStore.claimEdit(key);
+      if (!claimed) continue;
+
+      const token = claimed.editLease.token;
+
+      try {
+        const beforePut = () =>
+          this.calendarPollStore.checkEdit(key, token);
+
+        if (claimed.cancelled) {
+          await this.api.cancelCalendar(claimed, {beforePut});
+        } else {
+          await this.api.editCalendar(claimed, {beforePut});
+        }
+
+        await this.calendarPollStore.finishEdit(
+          key, token, claimed.revision
+        );
+      } catch {
+        this.log('Training Test: calendar poll edit failed; retry later.');
+        await this.calendarPollStore.releaseEdit(key, token);
+      }
+    }
+  }
+
+ async publishTodayCalendar() {
+   if (!this.calendarMode || !this.calendar || !this.calendarPollStore) return 0;
+   const plan = await this.calendarPlan();
+   let published = 0;
+   for (const workout of plan) {
+     if (await this.publishCalendar(workout)) published++;
+   }
+   return published;
+ }
+
  receive(u){
+   if (this.calendarMode &&
+       this.calendarCallbacks &&
+       u?.update_type === 'message_callback' &&
+       typeof u?.callback?.payload === 'string' &&
+       u.callback.payload.startsWith('cal:')) {
+     return this.run(async () => {
+       const result = await this.calendarCallbacks.receive(u);
+       if (!result?.handled) return false;
+
+       try {
+         if (this.api.answer) {
+           await this.api.answer(u.callback.callback_id);
+         }
+       } catch {
+         this.log('Training Test: calendar callback answer failed.');
+       }
+
+       return true;
+     });
+   } // CALENDAR_CALLBACK_ROUTING
+
+
+ if (this.calendarMode &&
+     u?.update_type === 'message_created' &&
+     u?.message?.body?.text === '/опрос') {
+   return this.run(async () => {
+     const m = u.message;
+     if (String(m.recipient?.chat_id) !== CHAT ||
+         m.recipient?.chat_type !== 'chat' ||
+         m.sender?.is_bot !== false ||
+         !Number.isSafeInteger(m.sender?.user_id) ||
+         !this.admins.includes(String(m.sender.user_id)) ||
+         typeof m.body?.mid !== 'string' ||
+         !m.body.mid) return false;
+
+     const timestamp = m.timestamp ?? u.timestamp;
+     if (!Number.isSafeInteger(timestamp) ||
+         Math.abs(+this.now() - timestamp) > 60000) return false;
+
+     await this.publishTodayCalendar();
+     return true;
+   });
+ } // CALENDAR_ADMIN_COMMAND
+
+
   const m=u?.message,cb=u?.callback;
   if(String(m?.recipient?.chat_id)!==CHAT||m.recipient.chat_type!=='chat'){if(u?.update_type==='message_callback')this.log(JSON.stringify({event:'training_test_callback',stage:'filter',reason:'chat_mismatch'}));return Promise.resolve(false);}
   const match=/^poll:([a-f0-9-]{36}):(yes|cancel)$/.exec(cb?.payload||'');
@@ -105,7 +432,7 @@ class Autopost{
  }
  close(){if(!this.closeFlight)this.closeFlight=(async()=>{await this.tail;this.stopped=true;await this.store.close()})();return this.closeFlight}
 }
-async function prepare({env=process.env,storeFactory,now,raw,booking}={}){
+async function prepare({env=process.env,storeFactory,calendarPollStoreFactory,calendarStore,calendarDb,now,raw,booking}={}){
  const c=await at('AUTOPOST_SETTINGS',()=>settings(env));if(!c)return null;
  await at('AUTOPOST_STORE_FACTORY',()=>{if(typeof storeFactory!=='function')throw Error('AUTOPOST_FIRESTORE_REQUIRED')});
  const api=await at('AUTOPOST_MAX_IDENTITY',()=>capability(c,{raw}));
@@ -115,7 +442,19 @@ async function prepare({env=process.env,storeFactory,now,raw,booking}={}){
  });
  // Server-only read, no local cache fallback and no startup writes.
  await at('AUTOPOST_FIRST_READ',()=>store.read(moscow(now?now():new Date()).date));
- return new Autopost({store,api,booking,admins:c.admins,now});
+ const calendarPollStore = calendarPollStoreFactory
+  ? calendarPollStoreFactory(c.expectedId,{
+      writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true'
+    })
+  : null;
+ const calendar = calendarStore
+  ? require('./fitpp-calendar-reader').createGroupCalendar({store:calendarStore,mainDb:calendarDb})
+  : null;
+ return new Autopost({
+    store,api,booking,calendar,calendarPollStore,
+    calendarMode:env.TRAINING_TEST_CALENDAR_POLLS_ENABLED==='true',
+    admins:c.admins,now
+  });
 }
 function attach(service,{schedule=setInterval,cancel=clearInterval}={}){
  let busy=false;const tick=()=>{if(busy)return;busy=true;void service.tick().catch(()=>service.log('Training Test: autopost tick refused.')).finally(()=>{busy=false})};

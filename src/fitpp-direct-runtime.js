@@ -27,7 +27,7 @@ async function prepare({env=process.env,sdk,now=Date.now}) {
   const contact=env.CONTACT_LINK_ENABLED==='true'
    ?await at('CONTACT_CONFIG',()=>require('./contact-linking-runtime').prepare({env,sdk,now,session})):null;
   const dailyBooking=autopost?require('./fitpp-daily-booking').createDailyBooking({db:session.db,botId:env.TEST_EXPECTED_BOT_ID,now}):null;
-  return {contact,dailyBooking,autopostStore:session.autopostStore,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
+  return {contact,dailyBooking,autopostStore:session.autopostStore,calendarPollStore:session.calendarPollStore,calendarStore:session.calendarStore,calendarDb:session.db,env:directEnv,callbackTransport:transport,post:(a,p,b)=>bridge.signedPost(a,p,b,{transport,now}),close:session.close};
  } catch(error){await session.close();throw error}
 }
 module.exports={prepare};

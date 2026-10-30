@@ -15,7 +15,7 @@ test('ambiguous sessions are refused',()=>{
 });
 
 test('group calendar reads persisted period sessions and skips cancellation',()=>{
- const s={schemaVersion:1,projectId:'fitpp-test',groups:[{id:'zarya',location:'zarya'}],periods:[{id:'period-1',group:'zarya'}],workouts:[
+ const s={schemaVersion:1,projectId:'fitpp-test',groups:[{id:'zarya',location:'zarya'}],periods:[{id:'period-1',group:'zarya'}],links:[],workouts:[
   {id:'session-1',groupId:'zarya',location:'zarya',periodId:'period-1',date,time:'20:00',cancelled:false},
   {id:'session-2',groupId:'zarya',location:'zarya',periodId:'period-1',date,time:'21:00',cancelled:true}
  ]};

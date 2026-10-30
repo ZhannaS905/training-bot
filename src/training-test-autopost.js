@@ -300,19 +300,19 @@ class Autopost{
  async refreshCalendarPolls() {
     if (!this.calendarMode || !this.calendar || !this.calendarPollStore) return;
 
-    const polls = await this.calendarPollStore.listPublished();
+    const polls = await at('CALENDAR_LIST', () => this.calendarPollStore.listPublished());
 
     for (const poll of polls) {
       const key = poll.key;
 
       // Never interpret a missing workout as a cancellation.
-      const workout = await this.calendar.findById(poll.workout.id);
+      const workout = await at('CALENDAR_FIND', () => this.calendar.findById(poll.workout.id));
       if (!workout) {
         this.log('Training Test: calendar workout not found; poll unchanged.');
         continue;
       }
 
-      await this.calendarPollStore.syncWorkout(key, workout);
+      await at('CALENDAR_SYNC', () => this.calendarPollStore.syncWorkout(key, workout));
 
       const current = await this.calendarPollStore.read(key);
       if (!current || current.status !== 'published' ||
@@ -324,7 +324,7 @@ class Autopost{
             current.workout.date + 'T' + current.workout.time + ':00+03:00'
           ) + 3600000) continue;
 
-      const claimed = await this.calendarPollStore.claimEdit(key);
+      const claimed = await at('CALENDAR_CLAIM', () => this.calendarPollStore.claimEdit(key));
       if (!claimed) continue;
 
       const token = claimed.editLease.token;

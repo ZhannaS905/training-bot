@@ -1,7 +1,7 @@
 'use strict';
 // Dedicated capability; general MAX write flags and Firebase adapters stay unchanged.
 const {randomUUID}=require('node:crypto');
-const {at}=require('./fitpp-direct-diagnostic');
+const {at,mark,format}=require('./fitpp-direct-diagnostic');
 const {MaxApi}=require('./api');
 const {CHAT,config,body}=require('./memory-training-test');
 const {checkTestBotIdentity,identityAccepted}=require('./test-bot-identity');
@@ -457,7 +457,7 @@ async function prepare({env=process.env,storeFactory,calendarPollStoreFactory,ca
   });
 }
 function attach(service,{schedule=setInterval,cancel=clearInterval}={}){
- let busy=false;const tick=()=>{if(busy)return;busy=true;void service.tick().catch(()=>service.log('Training Test: autopost tick refused.')).finally(()=>{busy=false})};
+ let busy=false;const tick=()=>{if(busy)return;busy=true;void service.tick().catch(error=>service.log('Training Test: autopost tick refused '+format(mark(error,'RUNTIME_PREPARE')))).finally(()=>{busy=false})};
  const timer=schedule(tick,1000);tick();return async()=>{cancel(timer);await service.close()};
 }
 module.exports={settings,training,capability,pollBody,Autopost,prepare,attach};

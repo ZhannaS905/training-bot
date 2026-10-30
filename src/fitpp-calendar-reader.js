@@ -30,4 +30,23 @@ function createCalendar({db}){
   return calendarDay(snap.data(),date);
  }};
 }
-module.exports={calendarDay,createCalendar,validDate};
+
+// The live 8846 group calendar is stored in trainers/{ownerUid}.groupScheduleV1,
+// not in states/main. Do not treat missing group periods as recurring sessions.
+function groupCalendarDay(schedule,date){
+ if(!validDate(date))throw Error('CALENDAR_DATE_REFUSED');
+ if(!schedule||schedule.schemaVersion!==1||schedule.projectId!=='fitpp-test'||!Array.isArray(schedule.workouts)||!Array.isArray(schedule.groups)||!Array.isArray(schedule.periods))throw Error('GROUP_CALENDAR_REFUSED');
+ const groups=new Map(schedule.groups.map(g=>[g.id,g]));
+ const result=[];
+ for(const w of schedule.workouts){
+  if(w.date!==date||w.cancelled===true)continue;
+  const group=groups.get(w.groupId||w.location);
+  if(!group||group.location!==w.location||!TIME.test(w.time)||typeof w.id!=='string'||!w.id||typeof w.periodId!=='string'||!schedule.periods.some(p=>p.id===w.periodId&&p.group===group.id))throw Error('GROUP_WORKOUT_REFUSED');
+  result.push({id:w.id,date,location:w.location,time:w.time,groupId:group.id});
+ }
+ result.sort((a,b)=>a.time.localeCompare(b.time)||a.location.localeCompare(b.location)||a.id.localeCompare(b.id));
+ if(new Set(result.map(w=>w.id)).size!==result.length)throw Error('GROUP_WORKOUT_DUPLICATE');
+ return result;
+}
+
+module.exports={calendarDay,groupCalendarDay,createCalendar,validDate};

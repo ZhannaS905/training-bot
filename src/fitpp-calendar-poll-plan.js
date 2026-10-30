@@ -7,7 +7,7 @@ const DATE=/^\d{4}-\d{2}-\d{2}$/, TIME=/^([01]\d|2[0-3]):[0-5]\d$/;
 const LOCATIONS=new Set(['zarya','pole','online']);
 function workoutKey(w){
  if(!w||typeof w.id!=='string'||!w.id||!DATE.test(w.date)||!TIME.test(w.time)||!LOCATIONS.has(w.location))throw Error('CALENDAR_WORKOUT_REFUSED');
- return createHash('sha256').update(JSON.stringify([w.id,w.date,w.location,w.time])).digest('hex');
+ return createHash('sha256').update(JSON.stringify(['training-test-workout-v1',w.id])).digest('hex');
 }
 function planDay(workouts,now=new Date()){
  if(!Array.isArray(workouts))throw Error('CALENDAR_NOT_AVAILABLE');

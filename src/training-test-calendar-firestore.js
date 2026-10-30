@@ -3,6 +3,8 @@
 // polls/{date}; all mutations are scoped to the stable workout hash.
 const {createHash,randomUUID}=require('node:crypto');
 const {workoutKey}=require('./fitpp-calendar-poll-plan');
+const {resolveClient}=require('./fitpp-calendar-booking-link');
+const {bookingId,bookingRecord}=require('./fitpp-calendar-booking');
 const {CHAT}=require('./training-test-firestore');
 const ROOT='trainingTestCalendarPolls';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -21,9 +23,11 @@ function validate(p,botId,key){
  (p.editLease&&(!UUID.test(p.editLease.token)||!Number.isSafeInteger(p.editLease.until))))throw Error('CALENDAR_POLL_DOCUMENT_REFUSED');
  return p;
 }
-function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>false,now=Date.now}){
+function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>false,bookingSyncEnabled=()=>false,now=Date.now}){
  if(raw?.app?.options?.projectId!=='fitpp-test'||typeof botId!=='string'||!/^[1-9]\d*$/.test(botId)||typeof validateAuth!=='function')throw Error('CALENDAR_POLL_SCOPE_REFUSED');
  const prefix=ROOT+'/'+botId+'/polls/';
+ const bindingsPath='fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test';
+ const bookingPrefix='fitppTestWorkspaces/synthetic-v1/calendarBookings/';
  const ref=key=>{if(!KEY.test(key))throw Error('CALENDAR_POLL_KEY_REFUSED');return sdk.doc(raw,prefix+key)};
  async function tx(key,fn){
   await validateAuth();
@@ -67,11 +71,25 @@ function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>fa
     const receipt=await transaction.get(receiptRef),digest=hash(event);
     if(receipt.exists()){if(receipt.data().digest!==digest)throw Error('CALENDAR_POLL_EVENT_CONFLICT');return false}
     if(p?.status!=='published'||p.cancelled===true||p.id!==event.uuid||p.mid!==event.mid||event.at<=(p.last[event.uid]??-1))return false;
+    let clientId=null;
+    if(bookingSyncEnabled()){
+      const bindingsRef=sdk.doc(raw,bindingsPath);
+      const bindingsSnap=await transaction.get(bindingsRef);
+      if(!bindingsSnap.exists())throw Error('CALENDAR_BOOKING_BINDINGS_MISSING');
+      clientId=resolveClient(bindingsSnap.data(),event.uid,botId);
+    }
     const next=structuredClone(p);next.last[event.uid]=event.at;next.lastEventUid=event.uid;
     if(event.action==='cancel'){delete next.votes[event.uid];next.order=next.order.filter(uid=>uid!==event.uid)}
     else{if(typeof event.name!=='string'||event.name.length>100)throw Error('CALENDAR_POLL_EVENT_REFUSED');
      if(!Object.hasOwn(next.votes,event.uid))next.order.push(event.uid);next.votes[event.uid]=event.name}
     if(Array.from(render(next).text).length>4000)return false;
+    if(clientId){
+      if(!writeEnabled())throw Error('CALENDAR_POLL_WRITES_DISABLED');
+      const id=bookingId(p.workout.id,clientId);
+      const bookingRef=sdk.doc(raw,bookingPrefix+id);
+      const record=bookingRecord(p.workout,clientId,event.action==='yes');
+      transaction.set(bookingRef,record);
+    }
     next.revision++;set(next);transaction.set(receiptRef,{digest,at:event.at});return true;
    });
   },

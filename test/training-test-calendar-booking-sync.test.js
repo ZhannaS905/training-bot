@@ -1,0 +1,379 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {database} = require('./helpers/autopost-firestore');
+const {createCalendarPollStore} = require('../src/training-test-calendar-firestore');
+const {workoutKey} = require('../src/fitpp-calendar-poll-plan');
+
+const workout = {
+  id: 'session-123',
+  date: '2026-11-02',
+  location: 'zarya',
+  time: '20:00'
+};
+
+const uuid = '12345678-1234-1234-1234-123456789012';
+const key = workoutKey(workout);
+
+function setup() {
+  const db = database();
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true
+  });
+  return {db, store};
+}
+
+test('calendar vote commits once and ignores duplicate event', async () => {
+  const {db, store} = setup();
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const event = {
+    id: 'callback-1',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 200,
+    action: 'yes',
+    name: 'Тест'
+  };
+
+  const render = () => ({text: 'OK'});
+
+  assert.equal(await store.vote(key, event, render), true);
+  assert.equal(await store.vote(key, event, render), false);
+
+  const poll = await store.read(key);
+  assert.equal(poll.votes['80'], 'Тест');
+  assert.equal(poll.revision, 1);
+
+  const receiptPaths = db.commits.filter(path => path.includes('/events/'));
+  assert.equal(receiptPaths.length, 1);
+});
+
+test('failed calendar vote does not change poll or create receipt', async () => {
+  const {db, store} = setup();
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const before = await store.read(key);
+  const commitsBefore = db.commits.length;
+
+  db.setFail('write');
+
+  await assert.rejects(
+    store.vote(key, {
+      id: 'callback-2',
+      uuid,
+      mid: 'mid.test',
+      uid: '80',
+      at: 200,
+      action: 'yes',
+      name: 'Тест'
+    }, () => ({text: 'OK'})),
+    /WRITE_DENIED/
+  );
+
+  assert.deepEqual(await store.read(key), before);
+  assert.equal(db.commits.length, commitsBefore);
+});
+
+test('booking sync remains disabled by default', async () => {
+  const {db, store} = setup();
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  await store.vote(key, {
+    id: 'callback-default-off',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 200,
+    action: 'yes',
+    name: 'Тест'
+  }, () => ({text: 'OK'}));
+
+  assert.equal(
+    [...db.data.keys()].some(path => path.includes('/calendarBookings/')),
+    false
+  );
+});
+
+test('enabled booking sync requires existing MAX bindings', async () => {
+  const db = database();
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true,
+    bookingSyncEnabled: () => true
+  });
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const before = await store.read(key);
+  const commitsBefore = db.commits.length;
+
+  await assert.rejects(
+    store.vote(key, {
+      id: 'callback-no-bindings',
+      uuid,
+      mid: 'mid.test',
+      uid: '80',
+      at: 200,
+      action: 'yes',
+      name: 'Тест'
+    }, () => ({text: 'OK'})),
+    /CALENDAR_BOOKING_BINDINGS_MISSING/
+  );
+
+  assert.deepEqual(await store.read(key), before);
+  assert.equal(db.commits.length, commitsBefore);
+});
+
+test('enabled booking sync accepts an existing MAX client binding', async () => {
+  const db = database();
+
+  db.data.set(
+    'fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test',
+    {
+      version: 1,
+      botId: 131384398,
+      bindings: [{
+        clientId: 'demo-client-1',
+        maxUserId: 80,
+        maxChatId: 80,
+        notificationsEnabled: true,
+        recoverNotifications: true
+      }]
+    }
+  );
+
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true,
+    bookingSyncEnabled: () => true
+  });
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const result = await store.vote(key, {
+    id: 'callback-linked-client',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 200,
+    action: 'yes',
+    name: 'Тест'
+  }, () => ({text: 'OK'}));
+
+  assert.equal(result, true);
+  assert.equal((await store.read(key)).votes['80'], 'Тест');
+
+  assert(
+    db.paths.includes(
+      'fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test'
+    )
+  );
+});
+
+test('MAX yes creates booking for the linked FitPP client', async () => {
+  const db = database();
+
+  db.data.set(
+    'fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test',
+    {
+      version: 1,
+      botId: 131384398,
+      bindings: [{
+        clientId: 'demo-client-1',
+        maxUserId: 80,
+        maxChatId: 80,
+        notificationsEnabled: true,
+        recoverNotifications: true
+      }]
+    }
+  );
+
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true,
+    bookingSyncEnabled: () => true
+  });
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  await store.vote(key, {
+    id: 'callback-booking-yes',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 200,
+    action: 'yes',
+    name: 'Тест'
+  }, () => ({text: 'OK'}));
+
+  const {bookingId} = require('../src/fitpp-calendar-booking');
+
+  const path =
+    'fitppTestWorkspaces/synthetic-v1/calendarBookings/' +
+    bookingId(workout.id, 'demo-client-1');
+
+  const booking = db.data.get(path);
+
+  assert.ok(booking, 'Запись FitPP должна существовать');
+  assert.equal(booking.workoutId, workout.id);
+  assert.equal(booking.clientId, 'demo-client-1');
+  assert.equal(booking.booked, true);
+  assert.equal(booking.source, 'max-training-test');
+  assert.equal((await store.read(key)).votes['80'], 'Тест');
+});
+
+test('MAX cancel removes the linked client booking', async () => {
+  const db = database();
+
+  db.data.set(
+    'fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test',
+    {
+      version: 1,
+      botId: 131384398,
+      bindings: [{
+        clientId: 'demo-client-1',
+        maxUserId: 80,
+        maxChatId: 80,
+        notificationsEnabled: true,
+        recoverNotifications: true
+      }]
+    }
+  );
+
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true,
+    bookingSyncEnabled: () => true
+  });
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const render = () => ({text: 'OK'});
+
+  await store.vote(key, {
+    id: 'callback-yes',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 200,
+    action: 'yes',
+    name: 'Тест'
+  }, render);
+
+  await store.vote(key, {
+    id: 'callback-cancel',
+    uuid,
+    mid: 'mid.test',
+    uid: '80',
+    at: 300,
+    action: 'cancel'
+  }, render);
+
+  const {bookingId} = require('../src/fitpp-calendar-booking');
+  const path =
+    'fitppTestWorkspaces/synthetic-v1/calendarBookings/' +
+    bookingId(workout.id, 'demo-client-1');
+
+  const booking = db.data.get(path);
+
+  assert.ok(booking);
+  assert.equal(booking.booked, false);
+  assert.equal(booking.workoutId, workout.id);
+  assert.equal(booking.clientId, 'demo-client-1');
+
+  const poll = await store.read(key);
+  assert.equal(Object.hasOwn(poll.votes, '80'), false);
+  assert.equal(poll.revision, 2);
+});
+
+test('failed booking write rolls back MAX vote and receipt', async () => {
+  const db = database();
+
+  db.data.set(
+    'fitppTestWorkspaces/synthetic-v1/notificationBindings/training-test',
+    {
+      version: 1,
+      botId: 131384398,
+      bindings: [{
+        clientId: 'demo-client-1',
+        maxUserId: 80,
+        maxChatId: 80,
+        notificationsEnabled: true,
+        recoverNotifications: true
+      }]
+    }
+  );
+
+  const store = createCalendarPollStore({
+    sdk: db.sdk,
+    raw: db.raw,
+    botId: '131384398',
+    validateAuth: async () => {},
+    writeEnabled: () => true,
+    bookingSyncEnabled: () => true
+  });
+
+  await store.reserve(workout, {id: uuid, createdAt: 100});
+  await store.finish(key, uuid, 'mid.test');
+
+  const before = await store.read(key);
+  const commitsBefore = db.commits.length;
+
+  db.setFail('write');
+
+  await assert.rejects(
+    store.vote(key, {
+      id: 'callback-failed-booking',
+      uuid,
+      mid: 'mid.test',
+      uid: '80',
+      at: 200,
+      action: 'yes',
+      name: 'Тест'
+    }, () => ({text: 'OK'}))
+  );
+
+  const after = await store.read(key);
+
+  assert.deepEqual(after, before, 'Голос MAX не должен измениться');
+  assert.equal(db.commits.length, commitsBefore);
+
+  const bookingPaths = [...db.data.keys()]
+    .filter(path => path.includes('/calendarBookings/'));
+
+  assert.deepEqual(bookingPaths, [], 'Запись FitPP не должна появиться');
+
+  const receiptPaths = [...db.data.keys()]
+    .filter(path => path.includes('/events/'));
+
+  assert.deepEqual(receiptPaths, [], 'Квитанция события не должна появиться');
+});

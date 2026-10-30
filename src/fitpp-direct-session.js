@@ -58,7 +58,21 @@ async function connect({env,sdk}) {
   function autopostStore(botId,{writeEnabled=()=>false,now=Date.now}={}) {
    return require('./training-test-firestore').createFirestoreStore({sdk,raw,botId,validateAuth,writeEnabled,now});
   }
-  return {db,contactStore,autopostStore,close};
+  // Separate read-only capability for the trainer calendar. No Firestore rules
+  // changes, no writes and no widening of the booking database adapter.
+  function calendarStore() {
+   const ref=sdk.doc(raw,'trainers/'+OWNER_UID);
+   return {async read(){
+    await validateAuth();
+    const snapshot=await sdk.getDocFromServer(ref);
+    await validateAuth();
+    if(!snapshot.exists())throw Error('TRAINER_CALENDAR_MISSING');
+    const data=snapshot.data();
+    if(!data||!Object.hasOwn(data,'groupScheduleV1'))throw Error('TRAINER_CALENDAR_MISSING');
+    return structuredClone(data.groupScheduleV1);
+   }};
+  }
+  return {db,contactStore,autopostStore,calendarStore,close};
  } catch(error) {await close();const safe=require('./fitpp-direct-diagnostic').mark(error,'CONNECT');safe.message='DIRECT_AUTH_CONNECTION_REJECTED';throw safe}
 }
 module.exports={settings,connect,OWNER_UID};

@@ -9,9 +9,9 @@ test('calendar uses persisted sessions rather than weekdays',()=>{
  assert.deepEqual(calendarDay(main,date),[{id:'a',date,location:'zarya',time:'20:00'}]);
  assert.deepEqual(calendarDay(main,'2026-11-03'),[]);
 });
-test('ambiguous sessions are refused',()=>{
+test('multiple sessions in one location are allowed',()=>{
  const main={datasetId:'synthetic-v1',schemaVersion:1,workouts:{a:w('a','zarya','20:00'),b:w('b','zarya','21:00')}};
- assert.throws(()=>calendarDay(main,date),/CALENDAR_AMBIGUOUS_LOCATION/);
+ assert.deepEqual(calendarDay(main,date),[{id:'a',date,location:'zarya',time:'20:00'},{id:'b',date,location:'zarya',time:'21:00'}]);
 });
 
 test('group calendar reads persisted period sessions and skips cancellation',()=>{
@@ -91,4 +91,43 @@ test('trainer-linked workout follows a move and cancellation',()=>{
   ()=>groupCalendarDay(schedule,'2026-11-03',undefined,{}),
   /GROUP_CALENDAR_LINK_MISSING/
  );
+});
+
+
+test('findById reads moved and cancelled workouts from states/main',async()=>{
+ const {createCalendar}=require('../src/fitpp-calendar-reader');
+ const id='workout-123';
+ const main={
+  datasetId:'synthetic-v1',
+  schemaVersion:1,
+  workouts:{
+   [id]:{
+    id,
+    date:'2026-11-05',
+    location:'zarya',
+    time:'22:30',
+    cancelled:false
+   }
+  }
+ };
+ const db={
+  doc(path){
+   assert.match(path,/states\/main$/);
+   return {async get(){return {exists:true,data:()=>main}}};
+  }
+ };
+ const calendar=createCalendar({db});
+
+ assert.deepEqual(await calendar.findById(id),{
+  id,date:'2026-11-05',location:'zarya',time:'22:30',cancelled:false
+ });
+
+ main.workouts[id].date='2026-11-06';
+ main.workouts[id].cancelled=true;
+
+ assert.deepEqual(await calendar.findById(id),{
+  id,date:'2026-11-06',location:'zarya',time:'22:30',cancelled:true
+ });
+
+ assert.equal(await calendar.findById('missing'),null);
 });

@@ -447,8 +447,8 @@ async function prepare({env=process.env,storeFactory,calendarPollStoreFactory,ca
       writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true'
     })
   : null;
- const calendar = calendarStore
-  ? require('./fitpp-calendar-reader').createGroupCalendar({store:calendarStore(),mainDb:calendarDb})
+ const calendar = calendarDb
+  ? require('./fitpp-calendar-reader').createCalendar({db:calendarDb})
   : null;
  return new Autopost({
     store,api,booking,calendar,calendarPollStore,

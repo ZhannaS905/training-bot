@@ -17,8 +17,6 @@ function calendarDay(main,date) {
   if(!w.cancelled)result.push({id,date,location:w.location,time:w.time});
  }
  result.sort((a,b)=>a.time.localeCompare(b.time)||a.location.localeCompare(b.location)||a.id.localeCompare(b.id));
- const seen=new Set();
- for(const w of result){const key=w.location+'|'+w.date;if(seen.has(key))throw Error('CALENDAR_AMBIGUOUS_LOCATION');seen.add(key)}
  return result;
 }
 function createCalendar({db}){
@@ -28,6 +26,20 @@ function createCalendar({db}){
   const snap=await db.doc(MAIN).get();
   if(!snap.exists)throw Error('CALENDAR_MAIN_MISSING');
   return calendarDay(snap.data(),date);
+ },async findById(id){
+  if(typeof id!=='string'||!id.trim())throw Error('CALENDAR_ID_REFUSED');
+  const snap=await db.doc(MAIN).get();
+  if(!snap.exists)throw Error('CALENDAR_MAIN_MISSING');
+  const main=snap.data();
+  if(!main||main.datasetId!=='synthetic-v1'||main.schemaVersion!==1||
+     !main.workouts||typeof main.workouts!=='object'||Array.isArray(main.workouts))
+    throw Error('CALENDAR_MAIN_REFUSED');
+  const w=main.workouts[id];
+  if(!w)return null;
+  if(w.id!==id||!validDate(w.date)||!LOCATIONS.has(w.location)||
+     !TIME.test(w.time)||typeof w.cancelled!=='boolean')
+    throw Error('CALENDAR_WORKOUT_REFUSED');
+  return {id,date:w.date,location:w.location,time:w.time,cancelled:w.cancelled};
  }};
 }
 

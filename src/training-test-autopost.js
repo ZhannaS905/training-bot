@@ -448,7 +448,7 @@ async function prepare({env=process.env,storeFactory,calendarPollStoreFactory,ca
     })
   : null;
  const calendar = calendarStore
-  ? require('./fitpp-calendar-reader').createGroupCalendar({store:calendarStore,mainDb:calendarDb})
+  ? require('./fitpp-calendar-reader').createGroupCalendar({store:calendarStore(),mainDb:calendarDb})
   : null;
  return new Autopost({
     store,api,booking,calendar,calendarPollStore,

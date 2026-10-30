@@ -128,4 +128,4 @@ function prepareTestContactLinking({identity,expectedBotId,token,allowedUserIds,
  return contactLinking({botId:identity.user_id,token,allowedUserIds,now,
   store:firebaseStore({sdk,db,botId:identity.user_id})});
 }
-module.exports={prepareTestContactLinking,phone,ownPhone,firebaseStore,contactLinking,MAIN,LINKS};
+module.exports={prepareTestContactLinking,phone,ownPhone,firebaseStore,contactLinking,MAIN,LINKS,validateRegistry};

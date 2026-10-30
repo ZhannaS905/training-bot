@@ -23,3 +23,13 @@ test('group calendar reads persisted period sessions and skips cancellation',()=
  assert.deepEqual(groupCalendarDay({...s,periods:[],workouts:[]},date),[]);
  assert.throws(()=>groupCalendarDay({...s,periods:[]},date),/GROUP_WORKOUT_REFUSED/);
 });
+
+test('linked original session follows moved journal workout and cancellation',()=>{
+ const schedule={schemaVersion:1,projectId:'fitpp-test',groups:[{id:'zarya',location:'zarya'}],periods:[{id:'p1',group:'zarya'}],workouts:[],links:[{periodId:'p1',scheduledDate:'2026-11-02',slotTime:'20:00',source:'main',workoutId:'original'}]};
+ const main={workouts:{original:{id:'original',location:'zarya',date:'2026-11-03',time:'19:00',cancelled:false}}};
+ assert.deepEqual(groupCalendarDay(schedule,'2026-11-02',main),[]);
+ assert.deepEqual(groupCalendarDay(schedule,'2026-11-03',main),[{id:'original',date:'2026-11-03',location:'zarya',time:'19:00',groupId:'zarya'}]);
+ main.workouts.original.cancelled=true;
+ assert.deepEqual(groupCalendarDay(schedule,'2026-11-03',main),[]);
+ assert.throws(()=>groupCalendarDay(schedule,'2026-11-03'),/GROUP_CALENDAR_MAIN_REQUIRED/);
+});

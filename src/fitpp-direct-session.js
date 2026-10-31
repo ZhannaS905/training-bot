@@ -60,9 +60,9 @@ async function connect({env,sdk}) {
   }
   // Separate read-only capability for the trainer calendar. No Firestore rules
   // changes, no writes and no widening of the booking database adapter.
-  function calendarPollStore(botId,{writeEnabled=()=>false,now=Date.now}={}) {
+  function calendarPollStore(botId,{writeEnabled=()=>false,bookingSyncEnabled=()=>false,now=Date.now}={}) {
     return require('./training-test-calendar-firestore').createCalendarPollStore({
-      sdk,raw,botId,validateAuth,writeEnabled,now
+      sdk,raw,botId,validateAuth,writeEnabled,bookingSyncEnabled,now
     });
   }
   function calendarStore() {

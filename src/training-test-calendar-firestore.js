@@ -87,7 +87,7 @@ function createCalendarPollStore({sdk,raw,botId,validateAuth,writeEnabled=()=>fa
       if(!writeEnabled())throw Error('CALENDAR_POLL_WRITES_DISABLED');
       const id=bookingId(p.workout.id,clientId);
       const bookingRef=sdk.doc(raw,bookingPrefix+id);
-      const record=bookingRecord(p.workout,clientId,event.action==='yes');
+      const record=bookingRecord(p.workout,clientId,event.action==='yes',event.uid,p.revision+1);
       transaction.set(bookingRef,record);
     }
     next.revision++;set(next);transaction.set(receiptRef,{digest,at:event.at});return true;

@@ -243,6 +243,8 @@ test('MAX yes creates booking for the linked FitPP client', async () => {
   assert.equal(booking.workoutId, workout.id);
   assert.equal(booking.clientId, 'demo-client-1');
   assert.equal(booking.booked, true);
+  assert.equal(booking.maxUserId, '80');
+  assert.equal(booking.pollRevision, 1);
   assert.equal(booking.source, 'max-training-test');
   assert.equal((await store.read(key)).votes['80'], 'Тест');
 });
@@ -307,6 +309,8 @@ test('MAX cancel removes the linked client booking', async () => {
 
   assert.ok(booking);
   assert.equal(booking.booked, false);
+  assert.equal(booking.maxUserId, '80');
+  assert.equal(booking.pollRevision, 2);
   assert.equal(booking.workoutId, workout.id);
   assert.equal(booking.clientId, 'demo-client-1');
 

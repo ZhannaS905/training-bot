@@ -267,8 +267,7 @@ class Autopost{
  tick(){return this.run(async()=>{
   const now=this.now(),t=moscow(now),due=Date.parse(t.date+'T10:00:00+03:00'),previous=this.lastTick;this.lastTick=+now;
   if (this.calendarMode) {
-    if (this.startedAt <= due && previous <= due &&
-        +now >= due && +now < due + 60000) {
+    if (+now >= due) {
       const plan = await this.calendarPlan();
       for (const workout of plan) {
         if (workout.publishDue) {
@@ -444,12 +443,17 @@ async function prepare({env=process.env,storeFactory,calendarPollStoreFactory,ca
  await at('AUTOPOST_FIRST_READ',()=>store.read(moscow(now?now():new Date()).date));
  const calendarPollStore = calendarPollStoreFactory
   ? calendarPollStoreFactory(c.expectedId,{
-      writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true'
+      writeEnabled:()=>env.TRAINING_TEST_AUTOPOST_ENABLED==='true',
+      bookingSyncEnabled:()=>env.TRAINING_TEST_BOOKING_SYNC_ENABLED==='true'
     })
   : null;
- const calendar = calendarDb
-  ? require('./fitpp-calendar-reader').createCalendar({db:calendarDb})
-  : null;
+ const calendar = calendarStore && calendarDb
+  ? require('./fitpp-combined-calendar').createCombinedCalendar({
+      calendarStore,calendarDb
+    })
+  : calendarDb
+    ? require('./fitpp-calendar-reader').createCalendar({db:calendarDb})
+    : null;
  return new Autopost({
     store,api,booking,calendar,calendarPollStore,
     calendarMode:env.TRAINING_TEST_CALENDAR_POLLS_ENABLED==='true',
